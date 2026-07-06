@@ -1049,23 +1049,17 @@ def predict_power(
     #       当前固定预测"今天"，参数留着但不暴露给 LLM
     #       放开时需注意 forecast API 仅支持未来 ~16 天
 
-    from predModels.Tools.weather_fetcher_tool import get_station_location
+    from predModels.Tools.weather_fetcher_tool import (
+        get_station_location, _load_stations_from_db, _match_station
+    )
 
     # 【步骤1】查站点经纬度
     print(f"\n🔍 查询站点信息: {station_name}")
     location_str = get_station_location.invoke({"station_name": station_name})
 
-    # 从文字结果中解析经纬度（get_station_location 返回的是文字摘要）
-    # 也可以直接用 weather_fetcher 的 STATIONS 字典，但走工具调用更规范
-    from predModels.Tools.weather_fetcher_tool import STATIONS
-    station_info = None
-    for key, info in STATIONS.items():
-        if (key in station_name or
-            station_name in info["name"] or
-            station_name == info["station_id"] or
-            station_name in info.get("location", "")):
-            station_info = info
-            break
+    # 从数据库查站点信息（get_station_location 返回的是文字摘要，这里需要结构化数据）
+    stations = _load_stations_from_db()
+    station_info = _match_station(station_name, stations)
 
     if station_info is None:
         raise ToolException(f"未找到站点: '{station_name}'")

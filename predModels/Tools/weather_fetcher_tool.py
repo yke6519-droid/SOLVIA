@@ -55,18 +55,111 @@ VARIABLES = [
 ARCHIVE_API = "https://archive-api.open-meteo.com/v1/archive"
 FORECAST_API = "https://api.open-meteo.com/v1/forecast"
 
-# todo 站点信息（后续可改为从数据库 solar_station 表读取）
-STATIONS = {
-    "英杰": {
-        "station_id": "2003021982752313403",
-        "name": "宁波海曙英杰250KW光伏",
-        "lat": 29.78,
-        "lon": 121.36,
-        "capacity_kw": 250.0,
-        "location": "浙江宁波",
-    },
-    # 后续多站点扩展时在此添加，或改为从数据库读取
-}
+# MySQL 连接配置（用于从 solar_station 表读取站点信息）
+MYSQL_URL = "mysql+pymysql://root:755028@localhost:3306/solar_agent?charset=utf8mb4"
+
+
+def _load_stations_from_db() -> dict:
+    """
+    从 MySQL solar_station 表加载所有启用的站点信息。
+
+    替代原来硬编码的 STATIONS 字典。
+    每次调用 get_station_location 时实时查库，保证数据最新。
+
+    返回:
+        dict: {站点关键词: {station_id, name, lat, lon, capacity_kw, location}}
+              key 用站点名的核心词（去掉省市前缀和容量后缀），
+              方便 LLM 用简称匹配，如 "英杰"、"哲丰新材料清水站"
+    """
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(MYSQL_URL)
+    query = text("""
+        SELECT id, station_code, name, capacity_kw, location, province, city,
+               longitude, latitude
+        FROM solar_station
+        WHERE status = 1
+    """)
+
+    stations = {}
+    with engine.connect() as conn:
+        rows = conn.execute(query).fetchall()
+
+    for row in rows:
+        # 用字段名访问，避免下标搞错
+        # row._mapping 是 SQLAlchemy Row 的字段名映射
+        r = row._mapping
+        full_name = r["name"]
+        lat = float(r["latitude"]) if r["latitude"] is not None else None
+        lon = float(r["longitude"]) if r["longitude"] is not None else None
+        capacity = float(r["capacity_kw"]) if r["capacity_kw"] is not None else None
+
+        # 提取站点简称作为 key（去掉省市前缀和容量后缀）
+        # "宁波海曙英杰250KW光伏" → "英杰"
+        # "哲丰新材料清水站新增" → "哲丰新材料清水站新增"
+        short_name = _extract_short_name(full_name)
+
+        stations[short_name] = {
+            "station_id": str(r["id"]),       # 数据库主键 id
+            "name": full_name,
+            "lat": lat,
+            "lon": lon,
+            "capacity_kw": capacity,
+            "location": r["location"] or "",  # location 字段
+        }
+
+    print(f"📋 从数据库加载 {len(stations)} 个站点: {list(stations.keys())}")
+    return stations
+
+
+def _extract_short_name(full_name: str) -> str:
+    """
+    从完整站点名中提取简称作为匹配 key。
+
+    规则:
+      "宁波海曙英杰250KW光伏"       → "英杰"       （去掉省市、容量、光伏）
+      "哲丰新材料清水站新增"         → "哲丰新材料清水站新增"（无省市前缀，直接用）
+      "浙江省-衢州市-哲丰3#造纸车间" → "哲丰3#造纸车间"（去掉"省-市-"前缀）
+
+    匹配策略：get_station_location 会同时用简称和全名做模糊匹配，
+    所以 key 提取不完美也没关系，全名也会参与匹配。
+    """
+    name = full_name
+
+    # 去掉 "省-市-" 前缀格式
+    if '-' in name:
+        parts = name.split('-')
+        if len(parts) >= 3:
+            name = '-'.join(parts[2:])
+
+    # 去掉容量标记 (250KW / 3MW / 400kWp 等)
+    import re
+    name = re.sub(r'\d+(?:\.\d+)?\s*(KW|kw|Kw|kWp|KWp|MW|mw|Mw|MWp)', '', name, flags=re.IGNORECASE)
+
+    # 去掉尾部"光伏""分布式电站""新增"等通用后缀
+    name = re.sub(r'(光伏|分布式电站|新增)$', '', name).strip()
+
+    return name if name else full_name
+
+
+def _match_station(station_name: str, stations: dict) -> dict:
+    """
+    模糊匹配站点：支持简称、全名、站点ID、位置关键词多种匹配方式。
+
+    参数:
+        station_name: 用户输入的站点名/关键词/ID
+        stations: _load_stations_from_db() 返回的站点字典
+
+    返回:
+        dict: 匹配到的站点信息，未匹配返回 None
+    """
+    for key, info in stations.items():
+        if (key in station_name or
+            station_name in info["name"] or
+            station_name == info["station_id"] or
+            station_name in info.get("location", "")):
+            return info
+    return None
 
 # ============================================================
 # 内部工具函数（非 Tool，供 Tool 内部调用）
@@ -300,26 +393,26 @@ def get_station_location(
     支持模糊匹配：站点简称、站点全名、站点ID、位置关键词均可作为输入。
     返回站点ID、名称、经纬度、装机容量、位置描述等信息。
     其他天气工具需要的 lat/lon 参数可通过本工具获取。
+    站点数据从 MySQL solar_station 表实时读取。
 
     返回:
         站点信息的文字描述，包含经纬度、装机容量等。
     """
-    # 模糊匹配: 站点名、站点ID、位置关键词都尝试
-    for key, info in STATIONS.items():
-        if (key in station_name or
-            station_name in info["name"] or
-            station_name == info["station_id"] or
-            station_name in info.get("location", "")):
-            print(f"✅ 匹配到站点: {info['name']} (lat={info['lat']}, lon={info['lon']})")
-            return (
-                f"站点: {info['name']}\n"
-                f"站点ID: {info['station_id']}\n"
-                f"经纬度: lat={info['lat']}, lon={info['lon']}\n"
-                f"装机容量: {info['capacity_kw']} kW\n"
-                f"位置: {info['location']}"
-            )
+    # 从数据库加载所有站点
+    stations = _load_stations_from_db()
+    info = _match_station(station_name, stations)
 
-    available = list(STATIONS.keys())
+    if info is not None:
+        print(f"✅ 匹配到站点: {info['name']} (lat={info['lat']}, lon={info['lon']})")
+        return (
+            f"站点: {info['name']}\n"
+            f"站点ID: {info['station_id']}\n"
+            f"经纬度: lat={info['lat']}, lon={info['lon']}\n"
+            f"装机容量: {info['capacity_kw']} kW\n"
+            f"位置: {info['location']}"
+        )
+
+    available = list(stations.keys())
     print(f"❌ 未找到站点: {station_name}")
     print(f"   当前可用站点: {available}")
     raise ToolException(
@@ -356,6 +449,85 @@ def get_current_datetime() -> str:
 
 
 # ============================================================
+# 全流程测试函数
+# ============================================================
+
+def full_flow_test(station_name: str):
+    """
+    全流程测试：输入站点名称 → 查经纬度 → 拉今日+昨日气象 → 生成摘要。
+
+    模拟 Agent 实际调用链:
+      1. get_station_location("英杰") → 拿到 lat/lon
+      2. get_today_weather(lat, lon)  → 今日气象
+      3. get_yesterday_weather(lat, lon) → 昨日气象
+      4. 汇总摘要
+    """
+    print(f"  输入站点名: {station_name}")
+    print(f"  {'─' * 56}")
+
+    # 步骤1: 查站点信息
+    print(f"  [步骤1] 查询站点信息...")
+    try:
+        loc_str = get_station_location.invoke({"station_name": station_name})
+        print(f"  {loc_str}")
+    except Exception as e:
+        print(f"  ❌ 站点查询失败: {e}")
+        return
+
+    # 从数据库拿结构化数据（工具返回的是文字摘要，这里需要 lat/lon）
+    stations = _load_stations_from_db()
+    info = _match_station(station_name, stations)
+    if info is None or info["lat"] is None or info["lon"] is None:
+        print(f"  ⚠️ 站点经纬度未设置，无法拉取气象数据（请先在数据库补充经纬度）")
+        return
+
+    lat, lon = info["lat"], info["lon"]
+    print(f"\n  [步骤2] 拉取今日气象 (lat={lat}, lon={lon})...")
+    today_result = get_today_weather.invoke({"lat": lat, "lon": lon})
+    if hasattr(today_result, "content"):
+        print(f"  ✅ 今日气象摘要:\n{today_result.content}")
+        df_today = today_result.artifact
+    else:
+        print(f"  ✅ {today_result}")
+        df_today = None
+
+    print(f"\n  [步骤3] 拉取昨日气象 (lat={lat}, lon={lon})...")
+    yesterday_result = get_yesterday_weather.invoke({"lat": lat, "lon": lon})
+    if hasattr(yesterday_result, "content"):
+        print(f"  ✅ 昨日气象摘要:\n{yesterday_result.content}")
+        df_yesterday = yesterday_result.artifact
+    else:
+        print(f"  ✅ {yesterday_result}")
+        df_yesterday = None
+
+    # 步骤4: 汇总摘要
+    print(f"\n  [步骤4] 全流程摘要")
+    print(f"  {'─' * 56}")
+    print(f"  站点: {info['name']} (ID: {info['station_id']})")
+    print(f"  经纬度: lat={lat}, lon={lon}")
+    print(f"  装机容量: {info['capacity_kw']} kW")
+
+    if df_today is not None and df_yesterday is not None:
+        # 对比今日 vs 昨日的辐射和温度
+        today_ssrd = df_today["shortwave_radiation"].mean()
+        yest_ssrd = df_yesterday["shortwave_radiation"].mean()
+        today_temp = df_today["temperature_2m"].mean()
+        yest_temp = df_yesterday["temperature_2m"].mean()
+
+        ssrd_change = ((today_ssrd - yest_ssrd) / max(yest_ssrd, 0.1)) * 100
+        temp_change = today_temp - yest_temp
+
+        print(f"  {'指标':<20} {'昨日':>10} {'今日':>10} {'变化':>10}")
+        print(f"  {'-' * 52}")
+        print(f"  {'平均短波辐射(W/m²)':<18} {yest_ssrd:>10.1f} {today_ssrd:>10.1f} {ssrd_change:>+9.1f}%")
+        print(f"  {'平均温度(°C)':<20} {yest_temp:>10.1f} {today_temp:>10.1f} {temp_change:>+9.1f}°C")
+        print(f"  {'数据条数':<20} {len(df_yesterday):>10} {len(df_today):>10}")
+
+    print(f"  {'─' * 56}")
+    print(f"  ✅ 全流程测试完成")
+
+
+# ============================================================
 # 模块自测
 # ============================================================
 if __name__ == "__main__":
@@ -371,7 +543,7 @@ if __name__ == "__main__":
 
     # 测试 2: 站点查询
     print("\n--- 测试 2: get_station_location ---")
-    loc_result = get_station_location.invoke({"station_name": "英杰"})
+    loc_result = get_station_location.invoke({"station_name": "哲丰新材料九号机"})
     print(f"  类型: {type(loc_result)}")
     print(f"  结果:\n{loc_result}")
 
@@ -425,6 +597,10 @@ if __name__ == "__main__":
         print(f"  结果: {bad_result}")
     except Exception as e:
         print(f"  预期异常: {type(e).__name__}: {e}")
+
+    # 测试 7: 全流程（站点名 → 经纬度 → 今日+昨日气象 → 摘要）
+    print("\n--- 测试 7: 全流程（站点名 → 气象数据 → 摘要） ---")
+    full_flow_test("英杰")
 
     print("\n" + "=" * 60)
     print("自测完成")
