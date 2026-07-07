@@ -1,4 +1,4 @@
-"""
+﻿"""
 pv_predictor.py - 光伏发电预测模块 (LangChain Tool)
 =====================================================
 基于历史气象 + 未来气象数据，使用 Stacking 集成模型预测未来 24 小时光伏发电量。
@@ -19,9 +19,10 @@ pv_predictor.py - 光伏发电预测模块 (LangChain Tool)
   radiation_aware_loss / radiation_stable_loss（TF 自定义损失函数注册）
 
 TODO 留口：
-  1. predict_power 的 target_date 参数 — 当前固定预测"今天"，后续放开任意未来日期
+  1. ✅ predict_power 的 target_date 参数 — 已支持任意日期(YYYY-MM-DD/M月D日/M月D号/M-D/今天/昨天)
+     实现：_parse_flexible_date 解析 + predict_station_power 改用底层 _fetch_* 函数
   2. ModelManager 多站点映射 — 当前硬编码英杰站点路径，后续从配置/DB 读
-  3. 【架构】当前 pv_predictor 与 weather_fetcher 同放 Tools/（方案A）。
+  3. 【架构优化】当前 pv_predictor 与 weather_fetcher 同放 Tools/（方案A）。
      后续引入第二个站点预测模型或 file_io 工具后，建议拆分为方案B：
        tools/pv_predictor.py     — 薄 @tool 入口（仅 predict_power）
        models/ensemble.py        — predict_24h_auto + 特征/纠偏/融合
@@ -39,6 +40,7 @@ import tensorflow as tf
 from datetime import datetime, timedelta
 from typing import Annotated, Optional
 from langchain_core.tools import tool, ToolException
+from dotenv import load_dotenv
 
 # ============================================================
 # 环境配置（必须在 import tensorflow 之后、加载模型之前设置）
@@ -57,15 +59,14 @@ warnings.filterwarnings('ignore')
 
 # 模型根路径（按天气类型分目录）
 # 晴天模型和多 云模型是两套独立的训练结果，预测时根据天气判断选其一
-MODEL_SUNNY = r"D:\AAA光伏项目\TRAIN\Jiupian\Results\英杰\晴天_5-8"
-MODEL_CLOUDY = r"D:\AAA光伏项目\TRAIN\Jiupian\Results\英杰\新融合_多云_ssrd增强版"
+MODEL_SUNNY = os.getenv("MODEL_SUNNY")
+MODEL_CLOUDY = os.getenv("MODEL_CLOUDY")
 
 # LSTM / LSTNet 的时间步长（训练时用的 24，预测时必须一致）
 TIME_STEP = 24
 
 # MySQL 连接配置（用于 compare_with_actual 查询实际发电量）
-# TODO: 后续改为从配置文件或环境变量读取，不要硬编码
-MYSQL_URL = "mysql+pymysql://root:755028@localhost:3306/solar_agent?charset=utf8mb4"
+MYSQL_URL = os.getenv("MYSQL_URL")
 
 
 # ============================================================
@@ -100,6 +101,8 @@ def radiation_stable_loss(y_true, y_pred):
 # 原脚本每次调用 predict_24h_auto 都会 load_all_models，加载 TF 模型 + 5 个 pkl
 # 文件需要好几秒。Agent 场景下可能多次调用预测，每次都重新加载太慢。
 # ModelManager 把已加载的模型缓存在内存中，第二次调用直接返回缓存。
+# todo 目前 ModelManager 中仅是英杰站点预测模型的硬加载。
+#  如果后续有新站点模型加入，要把该方法写的更灵活一些。能够根据用户要求的站点进行动态加载。
 
 class ModelManager:
     """
@@ -779,26 +782,11 @@ def compare_with_actual(pred_df: pd.DataFrame, station_id: str, predict_date: st
     返回:
         str: 对比结果文字摘要（供 LLM 阅读）
     """
-    try:
-        from sqlalchemy import create_engine, text
-    except ImportError:
-        return "⚠️ 历史对比需要 sqlalchemy + pymysql，未安装，跳过对比。"
+    # 【已迁移】实际发电量查询已迁移到 power_query_tool._query_actual_power
+    from predModels.Tools.power_query_tool import _query_actual_power
 
     try:
-        engine = create_engine(db_url)
-
-        # 查询该站点在 predict_date 的实际发电量
-        # power_generation 表结构: station_id, record_time, power_kwh
-        query = text("""
-            SELECT record_time, power_kwh
-            FROM power_generation
-            WHERE station_id = :sid
-              AND DATE(record_time) = :dt
-            ORDER BY record_time
-        """)
-
-        with engine.connect() as conn:
-            actual_df = pd.read_sql(query, conn, params={"sid": station_id, "dt": predict_date})
+        actual_df = _query_actual_power(station_id, predict_date)
 
         # 如果没有实际数据，返回提示（数据可能还没入库）
         if len(actual_df) == 0:
@@ -849,11 +837,14 @@ def compare_with_actual(pred_df: pd.DataFrame, station_id: str, predict_date: st
 
 
 # ============================================================
-# Layer 2: 站点整合层 — format_prediction_summary（新增，LLM摘要）
+# Layer 2: 站点整合层 — format_prediction_summary（LLM摘要）
 # ============================================================
 
 def format_prediction_summary(pred_df: pd.DataFrame, station_name: str,
                               weather_type: str, comparison: str = "") -> str:
+
+    # todo 后期可以把各模型的预测结果去除，目前来看有些冗余。只展示最终模型的结果即可
+
     """
     将预测结果 DataFrame 转为 LLM 可读的文字摘要。
 
@@ -952,46 +943,69 @@ def predict_station_power(station_name: str, lat: float, lon: float,
             pred_df: 预测结果 DataFrame（供下游 file_io 工具存 Excel）
             weather_type: 天气类型
     """
-    # 延迟导入 weather_fetcher，避免循环依赖
-    # 用绝对导入：predModels.Tools.weather_fetcher_tool
-    # （自测时 sys.path 已加 solar_agent 根目录，Agent 调用时包结构完整）
-    from predModels.Tools.weather_fetcher_tool import get_yesterday_weather, get_today_weather
+    # 延迟导入 weather_fetcher 底层函数，避免循环依赖
+    from predModels.Tools.weather_fetcher_tool import _fetch_from_archive, _fetch_from_forecast
 
-    # 日期默认值：预测今天，历史用昨天
-    if predict_date is None:
-        predict_date = datetime.now().strftime("%Y-%m-%d")
-    if history_date is None:
-        history_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    # predict_date / history_date 由上层 predict_power 解析后传入，不再在这里默认今天
+    from predModels.Tools.cache_manager import (
+        read_prediction_cache, write_prediction_cache,
+        read_archive_cache, write_archive_cache,
+        read_forecast_cache, write_forecast_cache,
+        clean_prediction_cache,
+    )
+
+    # 【缓存查询】先查预测缓存，命中则跳过整个预测流程
+    # 惰性清理过期缓存(当天已结束的预测标记为失效)
+    clean_prediction_cache()
+    cached_pred = read_prediction_cache(station_id, predict_date)
+    if cached_pred is not None:
+        print(f"\n⚡ 预测缓存命中，跳过气象拉取和模型预测")
+        # 缓存里只有 fusion 列，补齐其他模型列(用 fusion 填充)保持 DataFrame 结构一致
+        cached_pred["xgb"] = cached_pred["fusion"]
+        cached_pred["lgb"] = cached_pred["fusion"]
+        cached_pred["lstm"] = cached_pred["fusion"]
+        cached_pred["lstnet"] = cached_pred["fusion"]
+        cached_pred["hour"] = cached_pred["time"].dt.hour
+
+        # 仍然查一下实际值做对比(对比不入缓存，每次实时查)
+        comparison = compare_with_actual(cached_pred, station_id, predict_date)
+        weather_type = "缓存(未知)"
+        summary = format_prediction_summary(cached_pred, station_name, weather_type, comparison)
+        return summary, cached_pred, weather_type
 
     print(f"\n🚀 开始预测 {station_name} 站点 {predict_date} 发电量")
     print(f"   历史基准日: {history_date}")
     print(f"   经纬度: lat={lat}, lon={lon}")
 
-    # 【步骤1】拉取历史气象（昨天24h）
+    # 【步骤1】拉取历史气象（history_date 24h）
+    # 先查历史气象缓存(永久保存，过去天气不变)，未命中再拉 API
     print(f"\n📥 步骤1: 拉取历史气象 ({history_date})...")
-    # 注意：weather_fetcher 的工具内部会自己算日期，这里直接传 lat/lon
-    # 通过 .invoke() 调用，content_and_artifact 模式返回 ToolMessage
-    hist_result = get_yesterday_weather.invoke({"lat": lat, "lon": lon})
-    # ToolMessage 的 artifact 属性是原始 DataFrame
-    if hasattr(hist_result, "artifact"):
-        history_openmeteo = hist_result.artifact
+    history_openmeteo = read_archive_cache(station_id, history_date)
+    if history_openmeteo is not None:
+        print(f"   历史气象缓存命中，跳过 API 调用")
     else:
-        # 如果直接调用返回的是字符串（content），需要重新获取 DataFrame
-        # 这种情况发生在非 Agent 链调用时，退化处理
-        from predModels.Tools.weather_fetcher_tool import _fetch_from_archive
-        history_openmeteo = _fetch_from_archive(lat, lon, history_date, history_date).head(24)
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        if history_date > today_str:
+            # 历史基准日在今天或之后，archive API 还没有这天的数据，改用 forecast API
+            history_openmeteo = _fetch_from_forecast(lat, lon, history_date, history_date).head(24)
+        else:
+            history_openmeteo = _fetch_from_archive(lat, lon, history_date, history_date).head(24)
+        # 拉到的历史气象写入缓存(永久保存)
+        write_archive_cache(station_id, history_openmeteo)
 
     if history_openmeteo is None or len(history_openmeteo) == 0:
         raise ToolException(f"历史气象拉取失败: {history_date}")
 
-    # 【步骤2】拉取未来气象（今天24h）
+    # 【步骤2】拉取目标日气象（predict_date 24h）
+    # 先查未来气象缓存，未命中再拉 forecast API
     print(f"\n📥 步骤2: 拉取未来气象 ({predict_date})...")
-    today_result = get_today_weather.invoke({"lat": lat, "lon": lon})
-    if hasattr(today_result, "artifact"):
-        future_openmeteo = today_result.artifact
+    future_openmeteo = read_forecast_cache(station_id, predict_date)
+    if future_openmeteo is not None:
+        print(f"   未来气象缓存命中，跳过 API 调用")
     else:
-        from predModels.Tools.weather_fetcher_tool import _fetch_from_forecast
         future_openmeteo = _fetch_from_forecast(lat, lon, predict_date, predict_date).head(24)
+        # 拉到的未来气象写入缓存(短期有效，过期自动清理)
+        write_forecast_cache(station_id, future_openmeteo)
 
     if future_openmeteo is None or len(future_openmeteo) == 0:
         raise ToolException(f"未来气象拉取失败: {predict_date}")
@@ -1016,7 +1030,92 @@ def predict_station_power(station_name: str, lat: float, lon: float,
     print(f"\n📝 步骤6: 生成摘要...")
     summary = format_prediction_summary(pred_df, station_name, weather_type, comparison)
 
+    # 【步骤7】预测结果写入缓存(当天有效，当天结束后逻辑删除)
+    print(f"\n💾 步骤7: 写入预测缓存...")
+    try:
+        write_prediction_cache(station_id, predict_date, pred_df, weather_type)
+    except Exception as e:
+        print(f"   ⚠️ 预测缓存写入失败(不影响预测结果): {e}")
+
     return summary, pred_df, weather_type
+
+
+# ============================================================
+# 日期解析工具(供 predict_power 使用)
+# ============================================================
+# 支持多种自然日期写法，让 LLM 传什么格式都能解析。
+# 支持的格式:
+#   - "2026-07-03"        标准 ISO 格式
+#   - "7月3日" / "7月3号"  中文常见写法
+#   - "7-3" / "07-03"      月-日简写
+#   - "今天" / "昨天"       自然语言
+#   - "" / None            空值，默认今天
+# 年份缺省时用当前年份
+
+def _parse_flexible_date(date_str: str) -> str:
+    """
+    把多种日期格式统一解析成 "YYYY-MM-DD"。
+
+    参数:
+        date_str: 日期字符串，支持 YYYY-MM-DD / M月D日 / M月D号 / M-D / 今天 / 昨天 / 空
+
+    返回:
+        str: "YYYY-MM-DD" 格式日期
+    """
+    if date_str is None:
+        date_str = ""
+
+    date_str = date_str.strip()
+
+    # 空值或"今天" → 当前日期
+    if date_str == "" or date_str == "今天" or date_str == "today":
+        return datetime.now().strftime("%Y-%m-%d")
+
+    # "昨天" → 当前日期-1
+    if date_str == "昨天" or date_str == "yesterday":
+        return (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    # "明天" → 当前日期+1
+    if date_str == "明天" or date_str == "tomorrow":
+        return (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    now = datetime.now()
+
+    # "YYYY-MM-DD" 标准格式
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        pass
+
+    # "M月D日" / "M月D号" / "M月D" 中文格式
+    import re
+    m = re.match(r"^(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?$", date_str)
+    if m:
+        month, day = int(m.group(1)), int(m.group(2))
+        return f"{now.year}-{month:02d}-{day:02d}"
+
+    # "YYYY年M月D日" 带年份的中文格式
+    m = re.match(r"^(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?$", date_str)
+    if m:
+        year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        return f"{year}-{month:02d}-{day:02d}"
+
+    # "M-D" / "MM-DD" 月-日简写
+    m = re.match(r"^(\d{1,2})-(\d{1,2})$", date_str)
+    if m:
+        month, day = int(m.group(1)), int(m.group(2))
+        return f"{now.year}-{month:02d}-{day:02d}"
+
+    # "YYYY/MM/DD" 斜杠分隔
+    try:
+        return datetime.strptime(date_str.replace("/", "-"), "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        pass
+
+    # 都不匹配，抛异常让 LLM 知道格式不对
+    raise ToolException(
+        f"无法解析日期: '{date_str}'。支持格式: 'YYYY-MM-DD'、'M月D日'、'M月D号'、'M-D'、'今天'、'昨天'"
+    )
 
 
 # ============================================================
@@ -1026,16 +1125,23 @@ def predict_station_power(station_name: str, lat: float, lon: float,
 @tool(response_format="content_and_artifact")
 def predict_power(
     station_name: Annotated[str, "站点名称，例如 '英杰'"],
+    target_date: Annotated[str, "待预测日期，支持 'YYYY-MM-DD'、'M月D日'、'M月D号'、'M-D' 等格式。留空或传 '今天' 则预测今天"] = "",
 ) -> tuple[str, pd.DataFrame]:
-    """预测指定光伏站点未来 24 小时的发电量。
+    """预测指定光伏站点在指定日期的 24 小时发电量。
 
-    传入站点名称，自动完成完整流程：
+    传入站点名称和目标日期，自动完成完整流程：
     1. 查询站点经纬度
-    2. 拉取昨天气象数据（历史基准）和今天气象数据（未来预报）
-    3. 将气象数据转换为模型需要的 ERA5 格式
-    4. 使用 Stacking 集成模型预测 24 小时发电量
-    5. 与 MySQL 中的实际发电量对比（如已有数据）
-    6. 返回预测摘要和完整预测数据
+    2. 解析 target_date，历史基准日自动取前一天（如 target_date=7月3号，则历史日=7月2号）
+    3. 拉取历史基准日气象（archive API）和目标日气象（forecast API）
+    4. 将气象数据转换为模型需要的 ERA5 格式
+    5. 使用 Stacking 集成模型预测 24 小时发电量
+    6. 与 MySQL 中的实际发电量对比（如已有数据）
+    7. 返回预测摘要和完整预测数据
+
+    日期格式说明：
+    - target_date 支持多种自然写法：'2026-07-03'、'7月3日'、'7月3号'、'7-3'、'今天'、'昨天'
+    - 留空字符串 "" 或传 "今天" 表示预测今天
+    - 历史基准日自动取 target_date 的前一天，无需单独传入
 
     预测结果包含 5 个模型的预测值（XGBoost、LightGBM、LSTM、LSTNet、融合模型），
     以及天气类型判断（晴天/多云）。
@@ -1045,13 +1151,16 @@ def predict_power(
         artifact: 预测结果 DataFrame（24行，列: time, hour, xgb, lgb, lstm, lstnet, fusion）
                   可供文件读写工具保存为 Excel。
     """
-    # TODO: 后续可加 target_date 参数支持任意未来日期预测
-    #       当前固定预测"今天"，参数留着但不暴露给 LLM
-    #       放开时需注意 forecast API 仅支持未来 ~16 天
-
     from predModels.Tools.weather_fetcher_tool import (
         get_station_location, _load_stations_from_db, _match_station
     )
+
+    # 【日期解析】支持 YYYY-MM-DD / M月D日 / M月D号 / M-D / 今天 / 昨天 等格式
+    predict_date = _parse_flexible_date(target_date)
+    history_date = (datetime.strptime(predict_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+
+
+    print(f"\n📅 日期解析: target_date='{target_date}' → predict_date={predict_date}, history_date={history_date}")
 
     # 【步骤1】查站点经纬度
     print(f"\n🔍 查询站点信息: {station_name}")
@@ -1075,8 +1184,8 @@ def predict_power(
         lat=lat,
         lon=lon,
         station_id=station_id,
-        predict_date=None,   # None=今天
-        history_date=None,   # None=昨天
+        predict_date=predict_date,
+        history_date=history_date,
     )
 
     return summary, pred_df

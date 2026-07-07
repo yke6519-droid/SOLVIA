@@ -63,53 +63,14 @@ def _load_stations_from_db() -> dict:
     """
     从 MySQL solar_station 表加载所有启用的站点信息。
 
-    替代原来硬编码的 STATIONS 字典。
-    每次调用 get_station_location 时实时查库，保证数据最新。
+    【已迁移】实际查询逻辑已迁移到 power_query_tool._query_station_by_name,
+    本函数保留为薄封装,保证向后兼容(weather_fetcher 内部其他函数仍调本函数)。
 
     返回:
         dict: {站点关键词: {station_id, name, lat, lon, capacity_kw, location}}
-              key 用站点名的核心词（去掉省市前缀和容量后缀），
-              方便 LLM 用简称匹配，如 "英杰"、"哲丰新材料清水站"
     """
-    from sqlalchemy import create_engine, text
-
-    engine = create_engine(MYSQL_URL)
-    query = text("""
-        SELECT id, station_code, name, capacity_kw, location, province, city,
-               longitude, latitude
-        FROM solar_station
-        WHERE status = 1
-    """)
-
-    stations = {}
-    with engine.connect() as conn:
-        rows = conn.execute(query).fetchall()
-
-    for row in rows:
-        # 用字段名访问，避免下标搞错
-        # row._mapping 是 SQLAlchemy Row 的字段名映射
-        r = row._mapping
-        full_name = r["name"]
-        lat = float(r["latitude"]) if r["latitude"] is not None else None
-        lon = float(r["longitude"]) if r["longitude"] is not None else None
-        capacity = float(r["capacity_kw"]) if r["capacity_kw"] is not None else None
-
-        # 提取站点简称作为 key（去掉省市前缀和容量后缀）
-        # "宁波海曙英杰250KW光伏" → "英杰"
-        # "哲丰新材料清水站新增" → "哲丰新材料清水站新增"
-        short_name = _extract_short_name(full_name)
-
-        stations[short_name] = {
-            "station_id": str(r["id"]),       # 数据库主键 id
-            "name": full_name,
-            "lat": lat,
-            "lon": lon,
-            "capacity_kw": capacity,
-            "location": r["location"] or "",  # location 字段
-        }
-
-    print(f"📋 从数据库加载 {len(stations)} 个站点: {list(stations.keys())}")
-    return stations
+    from predModels.Tools.power_query_tool import _query_station_by_name
+    return _query_station_by_name()
 
 
 def _extract_short_name(full_name: str) -> str:
@@ -177,11 +138,28 @@ def _parse_wind_components(df):
     return df
 
 
-def _fetch_from_archive(lat, lon, start_date, end_date):
+def _fetch_from_archive(lat, lon, start_date, end_date, station_id=None):
     """
     调用 archive API 拉取历史气象。
     内部函数，返回 DataFrame。
+
+    参数:
+        lat, lon: 经纬度
+        start_date, end_date: 日期范围 "YYYY-MM-DD"
+        station_id: 站点ID(可选)。传入则启用历史气象缓存(永久保存)，
+                    未命中才调 API，拉完写入缓存；不传则直接调 API。
     """
+    # 【缓存查询】历史气象永久保存，过去天气不会变
+    if station_id is not None:
+        from predModels.Tools.cache_manager import read_archive_cache, write_archive_cache
+        # 单日查询直接走缓存
+        if start_date == end_date:
+            print("有缓存")
+            cached = read_archive_cache(station_id, start_date)
+            if cached is not None:
+                return cached
+
+    # 【API 拉取】缓存未命中或不启用缓存，走原始 API
     params = {
         "latitude": lat,
         "longitude": lon,
@@ -197,14 +175,38 @@ def _fetch_from_archive(lat, lon, start_date, end_date):
     df['time'] = pd.to_datetime(df['time'])
     df = df.sort_values("time").reset_index(drop=True)
     df = _parse_wind_components(df)
+
+    # 【缓存写入】拉到的历史气象写入缓存(永久保存)
+    if station_id is not None:
+        try:
+            from predModels.Tools.cache_manager import write_archive_cache
+            write_archive_cache(station_id, df)
+        except Exception as e:
+            print(f"⚠️ 历史气象缓存写入失败(不影响功能): {e}")
+
     return df
 
 
-def _fetch_from_forecast(lat, lon, start_date, end_date):
+def _fetch_from_forecast(lat, lon, start_date, end_date, station_id=None):
     """
     调用 forecast API 拉取未来气象。
     内部函数，返回 DataFrame。
+
+    参数:
+        lat, lon: 经纬度
+        start_date, end_date: 日期范围 "YYYY-MM-DD"
+        station_id: 站点ID(可选)。传入则启用未来气象缓存(短期有效)，
+                    未命中才调 API，拉完写入缓存；不传则直接调 API。
     """
+    # 【缓存查询】未来气象短期有效，过期的会被惰性清理
+    if station_id is not None:
+        from predModels.Tools.cache_manager import read_forecast_cache, write_forecast_cache
+        if start_date == end_date:
+            cached = read_forecast_cache(station_id, start_date)
+            if cached is not None:
+                return cached
+
+    # 【API 拉取】缓存未命中或不启用缓存，走原始 API
     params = {
         "latitude": lat,
         "longitude": lon,
@@ -220,6 +222,15 @@ def _fetch_from_forecast(lat, lon, start_date, end_date):
     df['time'] = pd.to_datetime(df['time'])
     df = df.sort_values("time").reset_index(drop=True)
     df = _parse_wind_components(df)
+
+    # 【缓存写入】拉到的未来气象写入缓存(短期有效，过期自动清理)
+    if station_id is not None:
+        try:
+            from predModels.Tools.cache_manager import write_forecast_cache
+            write_forecast_cache(station_id, df)
+        except Exception as e:
+            print(f"⚠️ 未来气象缓存写入失败(不影响功能): {e}")
+
     return df
 
 
@@ -285,7 +296,7 @@ def get_yesterday_weather(
     lon: Annotated[float, "经度，例如 121.36"],
 ) -> tuple[str, pd.DataFrame]:
     """获取指定经纬度昨天 0-23 点的历史气象数据。
-
+    todo 这部分加上缓存机制
     返回 24 行小时级数据，字段与 get_today_weather 一致。
     适用于需要历史气象作为预测模型输入基准的场景。
     数据来源为 open-meteo 历史 API (archive)。
