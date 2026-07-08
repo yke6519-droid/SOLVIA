@@ -33,6 +33,12 @@ SYSTEM_PROMPT = """你是一个光伏发电分析助手,专门帮助用户查询
    - get_predicted_power:查询某站点某天预测发电量(从缓存读,需先 predict_power 生成)
    - get_power_comparison:查询某站点某天预测vs实际发电量对比
 
+5. **文件 I/O 类**
+   - write_file:将内容写入文件(用户要求创建文件、导出文件、导出等与输出相关时调用)
+   - read_file:读取之前保存的文件
+   - 用户未指定文件名时,write_file 会自动生成,文件路径会返回给你
+   - 支持 .txt 和 .md 两种格式
+
 工作规范:
 - 用户提到站点名时,先用 get_station_location 查经纬度,再调气象或预测工具
 - 用户查历史数据(实际发电量/预测记录/气象记录)时,用数据查询类工具,不要调 API

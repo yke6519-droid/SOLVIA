@@ -17,6 +17,8 @@ from predModels.Tools.power_query_tool import (
     get_power_comparison,
 )
 
+from predModels.Tools.file_io_tool import write_file, read_file
+
 ALL_TOOLS = [
     # 站点查询类
     get_station_location,
@@ -35,6 +37,9 @@ ALL_TOOLS = [
     get_actual_power_by_range,
     get_predicted_power,
     get_power_comparison,
+    # 文件 I/O 类
+    write_file,
+    read_file,
 ]
 
 def get_all_tools():
