@@ -75,6 +75,8 @@ class PersistentWindowSummaryMemory(BaseChatMemory, SummarizerMixin):
     memory_key: str = "chat_history"
     summarize_threshold: int = 4  # 超出窗口多少条才触发摘要
     db_url: Optional[str] = None
+    # todo 这里session_id的进一步优化点：前端强制将session_id
+    #  拼接成为： userId_sessionId 的 格式提交给后端，这样能实现同一用户不同会话的分隔
     session_id: str = "default"
     moving_summary_buffer: str = ""  # 内存模式下的摘要
 
