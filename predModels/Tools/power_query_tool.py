@@ -28,9 +28,12 @@ from datetime import datetime
 from typing import Annotated, Optional
 from sqlalchemy import create_engine, text
 from langchain_core.tools import tool, ToolException
+from dotenv import load_dotenv
+import os
+load_dotenv()
 
 # MySQL 连接配置(与其他模块一致)
-MYSQL_URL = "mysql+pymysql://root:755028@localhost:3306/solar_agent?charset=utf8mb4"
+MYSQL_URL = os.environ.get("MYSQL_URL")
 
 
 # ============================================================

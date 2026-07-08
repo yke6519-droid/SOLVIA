@@ -881,24 +881,11 @@ def format_prediction_summary(pred_df: pd.DataFrame, station_name: str,
     gen_start = int(generating_hours.min()) if len(generating_hours) > 0 else 0
     gen_end = int(generating_hours.max()) if len(generating_hours) > 0 else 0
 
-    # 各子模型对比（用于判断模型分歧）
-    xgb_total = pred_df["xgb"].sum()
-    lgb_total = pred_df["lgb"].sum()
-    lstm_total = pred_df["lstm"].sum()
-    lstnet_total = pred_df["lstnet"].sum()
-
-    # 模型分歧度（最大值-最小值）/ 融合值，反映预测可信度
-    model_vals = [xgb_total, lgb_total, lstm_total, lstnet_total]
-    model_spread = (max(model_vals) - min(model_vals)) / max(total_power, 0.1) * 100
-
     lines = [
-        f"✅ {station_name} 站点预测完成（天气类型: {weather_type}）",
+        f"✅ {station_name} 预测完成（{weather_type}）",
         f"总发电量: {total_power:.1f} kWh",
-        f"峰值时段: {peak_hour}:00，峰值发电量: {peak_power:.1f} kWh",
-        f"发电时段: {gen_start}:00 ~ {gen_end}:00（共 {len(generating_hours)} 小时）",
-        f"各模型预测对比: XGBoost={xgb_total:.1f}, LightGBM={lgb_total:.1f}, "
-        f"LSTM={lstm_total:.1f}, LSTNet={lstnet_total:.1f} kWh",
-        f"模型分歧度: {model_spread:.1f}%（越小表示各模型越一致，预测越可信）",
+        f"峰值时段: {peak_hour}:00，峰值: {peak_power:.1f} kWh",
+        f"发电时段: {gen_start}:00~{gen_end}:00（{len(generating_hours)}小时）",
     ]
 
     if comparison:

@@ -3,6 +3,8 @@ prompt.py - Agent 系统提示词
 ==========================
 关键:模板必须含 MessagesPlaceholder("agent_scratchpad"),
 否则 create_tool_calling_agent 会报错——这是工具调用的中间思考区。
+同时必须含 MessagesPlaceholder("chat_history"),
+否则 memory 读取的历史消息无法注入 LLM prompt。
 """
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
@@ -40,6 +42,7 @@ SYSTEM_PROMPT = """你是一个光伏发电分析助手,专门帮助用户查询
 - 日期参数支持多种格式:'2026-07-03'、'7月3日'、'7月3号'、'7-3'、'今天'、'昨天'
 - 回答要简洁,数据用表格或列表呈现,避免大段文字
 - 如果工具调用失败,如实告知用户失败原因,不要编造数据
+- 注意对话历史中的信息,用户之前提到过的站点名、身份信息等要记住,不要重复询问
 """
 
 def build_prompt() -> ChatPromptTemplate:
@@ -47,11 +50,12 @@ def build_prompt() -> ChatPromptTemplate:
     构建 Agent 使用的对话模板。
 
     返回:
-        ChatPromptTemplate,包含 system / user / agent_scratchpad 三部分
+        ChatPromptTemplate,包含 system / chat_history / user / agent_scratchpad 四部分
     """
     prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_PROMPT),
-        ("user", "{input}"),                              # 用户输入占位符
-        MessagesPlaceholder("agent_scratchpad"),          # 必需:工具调用中间状态
+        MessagesPlaceholder("chat_history"),               # 对话记忆:注入历史消息
+        ("user", "{input}"),                               # 用户输入占位符
+        MessagesPlaceholder("agent_scratchpad"),           # 必需:工具调用中间状态
     ])
     return prompt

@@ -1,4 +1,4 @@
-"""
+﻿"""
 weather_fetcher_tool.py - 气象数据拉取工具模块 (LangChain Tools)
 =========================================================
 从 open-meteo API 拉取气象数据，所有公开函数均按 LangChain @tool 标准定义，
@@ -416,11 +416,9 @@ def get_station_location(
     if info is not None:
         print(f"✅ 匹配到站点: {info['name']} (lat={info['lat']}, lon={info['lon']})")
         return (
-            f"站点: {info['name']}\n"
-            f"站点ID: {info['station_id']}\n"
-            f"经纬度: lat={info['lat']}, lon={info['lon']}\n"
-            f"装机容量: {info['capacity_kw']} kW\n"
-            f"位置: {info['location']}"
+            f"站点: {info['name']} (ID:{info['station_id']}) | "
+            f"经纬度: {info['lat']},{info['lon']} | "
+            f"装机: {info['capacity_kw']}kW"
         )
 
     available = list(stations.keys())
