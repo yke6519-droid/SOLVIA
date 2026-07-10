@@ -104,9 +104,33 @@ def _extract_short_name(full_name: str) -> str:
     return name if name else full_name
 
 
+def _match_all_stations(station_name: str, stations: dict) -> list:
+    """
+    模糊匹配站点，返回所有匹配结果（不含交互逻辑）。
+
+    参数:
+        station_name: 用户输入的站点名/关键词/ID
+        stations: _load_stations_from_db() 返回的站点字典
+
+    返回:
+        list: 所有匹配的站点信息列表，空列表表示无匹配
+    """
+    matches = []
+    for key, info in stations.items():
+        if (key in station_name or
+            station_name in info["name"] or
+            station_name == info["station_id"] or
+            station_name in info.get("location", "")):
+            matches.append(info)
+    return matches
+
+
 def _match_station(station_name: str, stations: dict) -> dict:
     """
     模糊匹配站点：支持简称、全名、站点ID、位置关键词多种匹配方式。
+
+    多个匹配时，通过 ask_user 工具让用户选择具体站点。
+    单个匹配直接返回，无匹配返回 None。
 
     参数:
         station_name: 用户输入的站点名/关键词/ID
@@ -115,13 +139,49 @@ def _match_station(station_name: str, stations: dict) -> dict:
     返回:
         dict: 匹配到的站点信息，未匹配返回 None
     """
-    for key, info in stations.items():
-        if (key in station_name or
-            station_name in info["name"] or
-            station_name == info["station_id"] or
-            station_name in info.get("location", "")):
-            return info
-    return None
+    matches = _match_all_stations(station_name, stations)
+
+    if len(matches) == 0:
+        return None
+    elif len(matches) == 1:
+        return matches[0]
+
+    # 多个匹配，让用户选择
+    from predModels.Tools.ask_user_tool import ask_user
+
+    options = []
+    for i, info in enumerate(matches, 1):
+        options.append(
+            f"  {i}. {info['name']} (ID:{info['station_id']}, "
+            f"位置:{info.get('location', '未知')})"
+        )
+
+    question = (
+        f"找到 {len(matches)} 个匹配站点，请选择:\n"
+        + "\n".join(options)
+        + f"\n请输入序号 (1-{len(matches)})"
+    )
+
+    print(f"⚠️ '{station_name}' 匹配到 {len(matches)} 个站点，需要用户选择:")
+    for opt in options:
+        print(opt)
+
+    answer = ask_user.invoke({"question": question})
+    # answer 格式: "用户回复: X"
+    reply = answer.replace("用户回复:", "").strip()
+
+    try:
+        idx = int(reply) - 1
+        if 0 <= idx < len(matches):
+            chosen = matches[idx]
+            print(f"✅ 用户选择了: {chosen['name']}")
+            return chosen
+        else:
+            print(f"⚠️ 序号超出范围，默认返回第一个匹配: {matches[0]['name']}")
+            return matches[0]
+    except ValueError:
+        print(f"⚠️ 无效输入 '{reply}'，默认返回第一个匹配: {matches[0]['name']}")
+        return matches[0]
 
 # ============================================================
 # 内部工具函数（非 Tool，供 Tool 内部调用）

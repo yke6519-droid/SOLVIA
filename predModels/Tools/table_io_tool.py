@@ -188,9 +188,9 @@ def export_table(
 
     # 解析站点和日期
     from predModels.Tools.power_query_tool import _resolve_station_id
-    from predModels.Tools.pv_predictor import _parse_flexible_date
+    from predModels.Tools.date_parser_tool import parse_flexible_date
     station_id, info = _resolve_station_id(station_name)
-    predict_date = _parse_flexible_date(target_date)
+    predict_date = parse_flexible_date(target_date)
 
     # 根据数据类型获取 DataFrame
     df = _fetch_data(data_type, station_id, info, predict_date, station_name)

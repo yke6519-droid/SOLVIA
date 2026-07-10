@@ -24,8 +24,7 @@ TODO:
   - 发电量异常检测:聚合统计(和前7天均值对比),后续按需实现
 """
 import pandas as pd
-from datetime import datetime
-from typing import Annotated, Optional
+from typing import Annotated
 from sqlalchemy import create_engine, text
 from langchain_core.tools import tool, ToolException
 from dotenv import load_dotenv
@@ -220,8 +219,8 @@ def get_actual_power(
     返回:
         实际发电量的文字摘要(总发电量、峰值时段、有效发电时长)
     """
-    from predModels.Tools.pv_predictor import _parse_flexible_date
-    predict_date = _parse_flexible_date(target_date)
+    from predModels.Tools.date_parser_tool import parse_flexible_date
+    predict_date = parse_flexible_date(target_date)
     station_id, info = _resolve_station_id(station_name)
 
     df = _query_actual_power(station_id, predict_date)
@@ -247,9 +246,9 @@ def get_actual_power_by_range(
     返回:
         每日发电量的文字摘要列表
     """
-    from predModels.Tools.pv_predictor import _parse_flexible_date
-    start = _parse_flexible_date(start_date)
-    end = _parse_flexible_date(end_date)
+    from predModels.Tools.date_parser_tool import parse_flexible_date
+    start = parse_flexible_date(start_date)
+    end = parse_flexible_date(end_date)
     station_id, info = _resolve_station_id(station_name)
 
     engine = create_engine(MYSQL_URL)
@@ -288,9 +287,9 @@ def get_predicted_power(
     返回:
         预测发电量的文字摘要(总发电量、峰值时段、天气类型)
     """
-    from predModels.Tools.pv_predictor import _parse_flexible_date
+    from predModels.Tools.date_parser_tool import parse_flexible_date
     from predModels.Tools.cache_manager import read_prediction_cache
-    predict_date = _parse_flexible_date(target_date)
+    predict_date = parse_flexible_date(target_date)
     station_id, info = _resolve_station_id(station_name)
 
     df = read_prediction_cache(station_id, predict_date)
@@ -330,9 +329,9 @@ def get_weather_records(
     返回:
         气象数据的文字摘要(温度、辐射、云量等范围和均值)
     """
-    from predModels.Tools.pv_predictor import _parse_flexible_date
+    from predModels.Tools.date_parser_tool import parse_flexible_date
     from predModels.Tools.cache_manager import read_archive_cache, read_forecast_cache
-    predict_date = _parse_flexible_date(target_date)
+    predict_date = parse_flexible_date(target_date)
     station_id, info = _resolve_station_id(station_name)
 
     if data_type == "forecast":
@@ -377,9 +376,9 @@ def get_power_comparison(
     返回:
         对比摘要(预测总量、实际总量、偏差、偏差率、逐时对比)
     """
-    from predModels.Tools.pv_predictor import _parse_flexible_date
+    from predModels.Tools.date_parser_tool import parse_flexible_date
     from predModels.Tools.cache_manager import read_prediction_cache
-    predict_date = _parse_flexible_date(target_date)
+    predict_date = parse_flexible_date(target_date)
     station_id, info = _resolve_station_id(station_name)
 
     # 查预测缓存

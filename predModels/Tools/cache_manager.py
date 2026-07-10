@@ -16,20 +16,8 @@ cache_manager.py - 缓存管理模块
   - pv_predictor.predict_station_power        (预测结果缓存)
   - weather_fetcher_tool._fetch_from_archive  (历史气象缓存)
   - weather_fetcher_tool._fetch_from_forecast (未来气象缓存)
-
-todo 后续缓存表中数据量变大后，可以改为用 MySQL事件来进行定时清理。
-    不依赖于 python进程，MySQL内部自己调度
-    ------ 示例 -------
-    -- 每 3 小时清理一次过期预测缓存
-    CREATE EVENT IF NOT EXISTS clean_prediction_event
-    ON SCHEDULE EVERY 3 HOUR
-    DO UPDATE prediction_cache SET status = 0
-        WHERE status = 1 AND
-              predicted_at < DATE_SUB(NOW(), INTERVAL 3 HOUR);
-    ------------------
 """
 import pandas as pd
-from datetime import datetime, date
 from typing import Optional
 from sqlalchemy import create_engine, text
 

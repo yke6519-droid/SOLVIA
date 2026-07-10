@@ -19,6 +19,7 @@ from predModels.Tools.file_io_tool import write_file, read_file, verify_file
 from predModels.Tools.table_io_tool import export_table, read_table
 from predModels.Tools.knowledge_base_tool import search_knowledge_base
 from predModels.Tools.date_parser_tool import parse_date
+from predModels.Tools.ask_user_tool import ask_user
 
 ALL_TOOLS = [
     # 站点查询类
@@ -46,6 +47,8 @@ ALL_TOOLS = [
     read_table,
     # 知识库检索类
     search_knowledge_base,
+    # 用户交互类
+    ask_user,
 ]
 
 def get_all_tools():
