@@ -23,7 +23,7 @@ def main():
     # use_db=True: 启用 MySQL 持久化记忆
     # use_db=False: 纯内存记忆 (测试用)
     print("正在初始化 Agent...")
-    agent_executor = build_agent(session_id="user", use_db=True)
+    agent_executor = build_agent(session_id="user_02", use_db=True)
     print("初始化完成!\n")
 
     # 多轮对话循环

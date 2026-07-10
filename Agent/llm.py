@@ -20,7 +20,7 @@ def build_llm()-> ChatOpenAI:
         base_url=base_url,
         model=model_name,
         streaming=True,
-        temperature=0.3,
+        temperature=0.5,
     )
     return llmClient
 

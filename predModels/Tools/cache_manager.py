@@ -221,15 +221,19 @@ def write_forecast_cache(station_id: str, df: pd.DataFrame) -> None:
 
 def _clean_forecast_cache(station_id: str) -> int:
     """
-    清理已过期的未来气象(record_time 已过去的小时)。
-    过去的小时不再需要缓存,直接物理删除。
+    清理过期的未来气象缓存。
+
+    策略: 如果缓存数据的创建时间(created_at)距现在超过 1 小时,
+    全量清除该站点的所有 forecast 缓存记录。
+    这样下次调用会重新从 forecast API 拉取完整 24h 数据,
+    既保持时效性(预报每小时更新),又避免分片截断问题。
     """
     engine = create_engine(MYSQL_URL)
     with engine.begin() as conn:
         result = conn.execute(text("""
             DELETE FROM weather_forecast_cache
             WHERE station_id = :sid
-              AND record_time < NOW()
+              AND created_at < DATE_SUB(NOW(), INTERVAL 1 HOUR)
         """), {"sid": station_id})
     return result.rowcount
 

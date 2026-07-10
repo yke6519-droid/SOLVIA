@@ -41,10 +41,10 @@ def build_agent(
         agent=agent,
         tools=tools,
         memory=memory,
-        max_iterations=5,
+        max_iterations=10,
         verbose=True,
         handle_parsing_errors=True,
-        return_intermediate_steps=False,  # 不返回中间步骤,减少返回数据量
+        return_intermediate_steps=True,  # 不返回中间步骤,减少返回数据量
     )
 
     return agent_executor

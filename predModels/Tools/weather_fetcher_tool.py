@@ -1,19 +1,21 @@
 ﻿"""
 weather_fetcher_tool.py - 气象数据拉取工具模块 (LangChain Tools)
 =========================================================
-从 open-meteo API 拉取气象数据，所有公开函数均按 LangChain @tool 标准定义，
-可直接绑定到 LangChain Agent 使用。
+从 open-meteo API 拉取气象数据。
 
 数据源:
   - 历史气象: https://archive-api.open-meteo.com/v1/archive
   - 未来气象: https://api.open-meteo.com/v1/forecast
 
-工具列表:
-  1. get_today_weather        - 获取当天 0-23 点未来气象 (content + DataFrame)
-  2. get_yesterday_weather    - 获取昨天 0-23 点历史气象 (content + DataFrame)
-  3. get_weather_by_range     - 获取指定日期范围气象 (content + DataFrame)
-  4. get_station_location     - 根据站点名查经纬度 (文本)
-  5. get_current_datetime     - 获取当前日期时间 (文本)
+工具列表(@tool, 暴露给 LLM):
+  1. get_weather_by_range     - 获取指定日期范围气象 (content + DataFrame)
+  2. get_station_location     - 根据站点名查经纬度 (文本)
+  3. get_current_datetime     - 获取当前日期时间 (文本)
+
+内部函数(非 @tool, 供 pv_predictor 等模块调用):
+  - fetch_weather_by_date     - 按指定日期拉取单日气象(自动判断 archive/forecast)
+  - _fetch_from_archive       - 调 archive API 拉历史气象
+  - _fetch_from_forecast      - 调 forecast API 拉未来气象
 
 设计说明:
   - 返回 DataFrame 的工具使用 response_format="content_and_artifact"，
@@ -29,8 +31,7 @@ from typing import Annotated
 from langchain_core.tools import tool, ToolException
 
 __all__ = [
-    "get_today_weather",
-    "get_yesterday_weather",
+    "fetch_weather_by_date",
     "get_weather_by_range",
     "get_station_location",
     "get_current_datetime",
@@ -260,63 +261,35 @@ def _format_weather_summary(df: pd.DataFrame, label: str = "气象数据") -> st
 # ============================================================
 # LangChain Tools
 # ============================================================
+def fetch_weather_by_date(
+    lat: float,
+    lon: float,
+    date_str: str,
+    station_id: str = None,
+) -> pd.DataFrame:
+    """按指定日期拉取单日 24h 气象数据（内部函数，非 @tool）。
 
-@tool(response_format="content_and_artifact")
-def get_today_weather(
-    lat: Annotated[float, "纬度，例如 29.78"],
-    lon: Annotated[float, "经度，例如 121.36"],
-) -> tuple[str, pd.DataFrame]:
-    """获取指定经纬度当天 0-23 点的未来气象预报数据。
+    自动判断使用 archive API 还是 forecast API:
+    - 过去日期（昨天及更早）→ archive API（历史实况）
+    - 今天及未来日期 → forecast API（预报）
 
-    返回 24 行小时级数据，包含温度、露点、低云量、短波辐射、直接辐射、风分量等字段。
-    适用于需要当天气象条件的场景，例如光伏发电预测。
-    数据来源为 open-meteo 预报 API (forecast)。
-
-    返回:
-        content: 气象数据文字摘要（供 LLM 阅读）
-        artifact: 原始 DataFrame（供下游工具如 pv_predictor 使用）
-    """
-    today = datetime.now().strftime("%Y-%m-%d")
-    print(f"📥 拉取今天({today})未来气象: lat={lat}, lon={lon}")
-
-    try:
-        df = _fetch_from_forecast(lat, lon, today, today)
-        df = df.head(24).reset_index(drop=True)
-        print(f"✅ 今天气象拉取完成: {len(df)} 条")
-        summary = _format_weather_summary(df, f"今天({today})未来气象")
-        return summary, df
-    except Exception as e:
-        print(f"❌ 今天气象拉取失败: {e}")
-        raise ToolException(f"今天({today})气象拉取失败: {e}")
-
-
-@tool(response_format="content_and_artifact")
-def get_yesterday_weather(
-    lat: Annotated[float, "纬度，例如 29.78"],
-    lon: Annotated[float, "经度，例如 121.36"],
-) -> tuple[str, pd.DataFrame]:
-    """获取指定经纬度昨天 0-23 点的历史气象数据。
-    todo 这部分加上缓存机制
-    返回 24 行小时级数据，字段与 get_today_weather 一致。
-    适用于需要历史气象作为预测模型输入基准的场景。
-    数据来源为 open-meteo 历史 API (archive)。
+    参数:
+        lat, lon: 经纬度
+        date_str: 日期 "YYYY-MM-DD"
+        station_id: 站点ID（可选），传入则启用缓存
 
     返回:
-        content: 气象数据文字摘要（供 LLM 阅读）
-        artifact: 原始 DataFrame（供下游工具使用）
+        pd.DataFrame: 24 行小时级气象数据
     """
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    print(f"📥 拉取昨天({yesterday})历史气象: lat={lat}, lon={lon}")
+    today = datetime.now().date()
+    target = datetime.strptime(date_str, "%Y-%m-%d").date()
 
-    try:
-        df = _fetch_from_archive(lat, lon, yesterday, yesterday)
-        df = df.head(24).reset_index(drop=True)
-        print(f"✅ 昨天气象拉取完成: {len(df)} 条")
-        summary = _format_weather_summary(df, f"昨天({yesterday})历史气象")
-        return summary, df
-    except Exception as e:
-        print(f"❌ 昨天气象拉取失败: {e}")
-        raise ToolException(f"昨天({yesterday})气象拉取失败: {e}")
+    if target < today:
+        df = _fetch_from_archive(lat, lon, date_str, date_str, station_id)
+    else:
+        df = _fetch_from_forecast(lat, lon, date_str, date_str, station_id)
+
+    return df.head(24).reset_index(drop=True)
 
 
 @tool(response_format="content_and_artifact")
@@ -327,6 +300,8 @@ def get_weather_by_range(
     end_date: Annotated[str, "结束日期，格式 YYYY-MM-DD，例如 2026-07-06"],
 ) -> tuple[str, pd.DataFrame]:
     """获取指定经纬度在指定日期范围内的气象数据。
+
+    用户需要查询单日的天气时，让start_date = end_date即可
 
     自动判断使用历史 API 还是预报 API：
     - 过去日期（昨天及更早）使用 archive API（历史实况）
@@ -467,8 +442,8 @@ def full_flow_test(station_name: str):
 
     模拟 Agent 实际调用链:
       1. get_station_location("英杰") → 拿到 lat/lon
-      2. get_today_weather(lat, lon)  → 今日气象
-      3. get_yesterday_weather(lat, lon) → 昨日气象
+      2. fetch_weather_by_date(lat, lon, today)  → 今日气象
+      3. fetch_weather_by_date(lat, lon, yesterday) → 昨日气象
       4. 汇总摘要
     """
     print(f"  输入站点名: {station_name}")
@@ -491,22 +466,23 @@ def full_flow_test(station_name: str):
         return
 
     lat, lon = info["lat"], info["lon"]
+    today = datetime.now().strftime("%Y-%m-%d")
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
     print(f"\n  [步骤2] 拉取今日气象 (lat={lat}, lon={lon})...")
-    today_result = get_today_weather.invoke({"lat": lat, "lon": lon})
-    if hasattr(today_result, "content"):
-        print(f"  ✅ 今日气象摘要:\n{today_result.content}")
-        df_today = today_result.artifact
-    else:
-        print(f"  ✅ {today_result}")
+    try:
+        df_today = fetch_weather_by_date(lat, lon, today)
+        print(f"  ✅ 今日气象拉取完成: {len(df_today)} 条")
+    except Exception as e:
+        print(f"  ❌ 今日气象拉取失败: {e}")
         df_today = None
 
     print(f"\n  [步骤3] 拉取昨日气象 (lat={lat}, lon={lon})...")
-    yesterday_result = get_yesterday_weather.invoke({"lat": lat, "lon": lon})
-    if hasattr(yesterday_result, "content"):
-        print(f"  ✅ 昨日气象摘要:\n{yesterday_result.content}")
-        df_yesterday = yesterday_result.artifact
-    else:
-        print(f"  ✅ {yesterday_result}")
+    try:
+        df_yesterday = fetch_weather_by_date(lat, lon, yesterday)
+        print(f"  ✅ 昨日气象拉取完成: {len(df_yesterday)} 条")
+    except Exception as e:
+        print(f"  ❌ 昨日气象拉取失败: {e}")
         df_yesterday = None
 
     # 步骤4: 汇总摘要
@@ -556,31 +532,22 @@ if __name__ == "__main__":
     print(f"  类型: {type(loc_result)}")
     print(f"  结果:\n{loc_result}")
 
-    # 测试 3: 昨天气象 (content + artifact)
-    print("\n--- 测试 3: get_yesterday_weather ---")
-    y_result = get_yesterday_weather.invoke({"lat": 29.78, "lon": 121.36})
-    print(f"  类型: {type(y_result)}")
-    # content_and_artifact 工具 invoke 返回 ToolMessage
-    if hasattr(y_result, "content") and hasattr(y_result, "artifact"):
-        print(f"  content (LLM 摘要):\n{y_result.content}")
-        df_y = y_result.artifact
-        print(f"  artifact (DataFrame): shape={df_y.shape}")
-        print(f"  列: {list(df_y.columns)}")
-        print(f"  时间范围: {df_y['time'].min()} ~ {df_y['time'].max()}")
-    else:
-        print(f"  结果: {y_result}")
+    # 测试 3: fetch_weather_by_date (历史日期)
+    print("\n--- 测试 3: fetch_weather_by_date (昨天) ---")
+    yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    df_y = fetch_weather_by_date(29.78, 121.36, yesterday_str)
+    print(f"  类型: {type(df_y)}")
+    print(f"  DataFrame: shape={df_y.shape}")
+    print(f"  列: {list(df_y.columns)}")
+    print(f"  时间范围: {df_y['time'].min()} ~ {df_y['time'].max()}")
 
-    # 测试 4: 今天气象 (content + artifact)
-    print("\n--- 测试 4: get_today_weather ---")
-    t_result = get_today_weather.invoke({"lat": 29.78, "lon": 121.36})
-    print(f"  类型: {type(t_result)}")
-    if hasattr(t_result, "content") and hasattr(t_result, "artifact"):
-        print(f"  content (LLM 摘要):\n{t_result.content}")
-        df_t = t_result.artifact
-        print(f"  artifact (DataFrame): shape={df_t.shape}")
-        print(f"  时间范围: {df_t['time'].min()} ~ {df_t['time'].max()}")
-    else:
-        print(f"  结果: {t_result}")
+    # 测试 4: fetch_weather_by_date (今天/预报)
+    print("\n--- 测试 4: fetch_weather_by_date (今天) ---")
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    df_t = fetch_weather_by_date(29.78, 121.36, today_str)
+    print(f"  类型: {type(df_t)}")
+    print(f"  DataFrame: shape={df_t.shape}")
+    print(f"  时间范围: {df_t['time'].min()} ~ {df_t['time'].max()}")
 
     # 测试 5: 日期范围查询（昨天到今天）
     print("\n--- 测试 5: get_weather_by_range ---")

@@ -20,7 +20,7 @@ pv_predictor.py - 光伏发电预测模块 (LangChain Tool)
 
 TODO 留口：
   1. ✅ predict_power 的 target_date 参数 — 已支持任意日期(YYYY-MM-DD/M月D日/M月D号/M-D/今天/昨天)
-     实现：_parse_flexible_date 解析 + predict_station_power 改用底层 _fetch_* 函数
+     实现：parse_flexible_date 解析 + predict_station_power 改用底层 _fetch_* 函数
   2. ModelManager 多站点映射 — 当前硬编码英杰站点路径，后续从配置/DB 读
   3. 【架构优化】当前 pv_predictor 与 weather_fetcher 同放 Tools/（方案A）。
      后续引入第二个站点预测模型或 file_io 工具后，建议拆分为方案B：
@@ -41,6 +41,7 @@ from datetime import datetime, timedelta
 from typing import Annotated, Optional
 from langchain_core.tools import tool, ToolException
 from dotenv import load_dotenv
+from predModels.Tools.date_parser_tool import parse_flexible_date
 
 # ============================================================
 # 环境配置（必须在 import tensorflow 之后、加载模型之前设置）
@@ -1028,84 +1029,6 @@ def predict_station_power(station_name: str, lat: float, lon: float,
 
 
 # ============================================================
-# 日期解析工具(供 predict_power 使用)
-# ============================================================
-# 支持多种自然日期写法，让 LLM 传什么格式都能解析。
-# 支持的格式:
-#   - "2026-07-03"        标准 ISO 格式
-#   - "7月3日" / "7月3号"  中文常见写法
-#   - "7-3" / "07-03"      月-日简写
-#   - "今天" / "昨天"       自然语言
-#   - "" / None            空值，默认今天
-# 年份缺省时用当前年份
-
-def _parse_flexible_date(date_str: str) -> str:
-    """
-    把多种日期格式统一解析成 "YYYY-MM-DD"。
-
-    参数:
-        date_str: 日期字符串，支持 YYYY-MM-DD / M月D日 / M月D号 / M-D / 今天 / 昨天 / 空
-
-    返回:
-        str: "YYYY-MM-DD" 格式日期
-    """
-    if date_str is None:
-        date_str = ""
-
-    date_str = date_str.strip()
-
-    # 空值或"今天" → 当前日期
-    if date_str == "" or date_str == "今天" or date_str == "today":
-        return datetime.now().strftime("%Y-%m-%d")
-
-    # "昨天" → 当前日期-1
-    if date_str == "昨天" or date_str == "yesterday":
-        return (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-
-    # "明天" → 当前日期+1
-    if date_str == "明天" or date_str == "tomorrow":
-        return (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-
-    now = datetime.now()
-
-    # "YYYY-MM-DD" 标准格式
-    try:
-        return datetime.strptime(date_str, "%Y-%m-%d").strftime("%Y-%m-%d")
-    except ValueError:
-        pass
-
-    # "M月D日" / "M月D号" / "M月D" 中文格式
-    import re
-    m = re.match(r"^(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?$", date_str)
-    if m:
-        month, day = int(m.group(1)), int(m.group(2))
-        return f"{now.year}-{month:02d}-{day:02d}"
-
-    # "YYYY年M月D日" 带年份的中文格式
-    m = re.match(r"^(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?$", date_str)
-    if m:
-        year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        return f"{year}-{month:02d}-{day:02d}"
-
-    # "M-D" / "MM-DD" 月-日简写
-    m = re.match(r"^(\d{1,2})-(\d{1,2})$", date_str)
-    if m:
-        month, day = int(m.group(1)), int(m.group(2))
-        return f"{now.year}-{month:02d}-{day:02d}"
-
-    # "YYYY/MM/DD" 斜杠分隔
-    try:
-        return datetime.strptime(date_str.replace("/", "-"), "%Y-%m-%d").strftime("%Y-%m-%d")
-    except ValueError:
-        pass
-
-    # 都不匹配，抛异常让 LLM 知道格式不对
-    raise ToolException(
-        f"无法解析日期: '{date_str}'。支持格式: 'YYYY-MM-DD'、'M月D日'、'M月D号'、'M-D'、'今天'、'昨天'"
-    )
-
-
-# ============================================================
 # Layer 1: LLM 工具入口 — @tool predict_power
 # ============================================================
 
@@ -1143,7 +1066,7 @@ def predict_power(
     )
 
     # 【日期解析】支持 YYYY-MM-DD / M月D日 / M月D号 / M-D / 今天 / 昨天 等格式
-    predict_date = _parse_flexible_date(target_date)
+    predict_date = parse_flexible_date(target_date)
     history_date = (datetime.strptime(predict_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
 
 

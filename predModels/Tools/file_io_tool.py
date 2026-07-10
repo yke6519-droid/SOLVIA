@@ -6,6 +6,7 @@ file_io_tool.py - 文件读写工具模块 (LangChain Tools)
 工具列表(@tool,暴露给 LLM):
   1. write_file   将内容写入文件(用户要求创建/导出/保存时调用)
   2. read_file    读取指定文件内容
+  3. verify_file  校验文件是否成功生成(write_file/export_table 后必须调用)
 
 设计说明:
   - 输出目录从 .env 的 FILE_DIR 读取,不硬编码
@@ -207,3 +208,106 @@ def read_file(
         raise ToolException(f"文件读取失败: {e}")
 
     return content
+
+
+# ============================================================
+# 文件校验工具
+# ============================================================
+
+def _format_file_size(size_bytes: int) -> str:
+    """把字节数格式化为人类可读的大小。"""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    else:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
+@tool
+def verify_file(
+    filename: Annotated[str, "要校验的文件名,如 '英杰7月9日预测.xlsx'"],
+) -> str:
+    """校验文件是否成功生成。
+
+    在 write_file 或 export_table 生成文件后调用,验证文件确实存在且内容完整。
+    支持所有格式: .txt、.md、.xlsx、.xls、.csv。
+
+    返回:
+        校验结果(文件存在则返回大小、行列数等;不存在则报错)
+    """
+    if not FILE_DIR:
+        raise ToolException("FILE_DIR 未配置,请在 .env 中设置 FILE_DIR")
+
+    # 路径安全:防止 ../ 路径穿越
+    full_path = os.path.normpath(os.path.join(FILE_DIR, filename))
+    if not full_path.startswith(os.path.normpath(FILE_DIR)):
+        raise ToolException("文件名包含非法路径")
+
+    # 检查文件是否存在
+    if not os.path.exists(full_path):
+        existing = _list_files_in_dir()
+        if existing:
+            hint = f"当前目录下有这些文件: {', '.join(existing)}"
+        else:
+            hint = "当前目录为空"
+        return f"❌ 文件校验失败: {filename} 不存在\n{hint}"
+
+    # 基础信息:大小 + 创建时间
+    stat = os.stat(full_path)
+    size_str = _format_file_size(stat.st_size)
+    ctime_str = datetime.fromtimestamp(stat.st_ctime).strftime("%Y-%m-%d %H:%M:%S")
+
+    # 根据后缀做内容校验
+    ext = os.path.splitext(filename)[1].lower()
+
+    if ext in (".txt", ".md"):
+        # 文本类:行数 + 字符数 + 前 3 行预览
+        try:
+            with open(full_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            char_count = sum(len(line) for line in lines)
+            preview_lines = lines[:3]
+            preview = "".join(f"  {line.rstrip()}\n" for line in preview_lines)
+            return (
+                f"✅ 文件校验通过: {filename}\n"
+                f"  大小: {size_str}\n"
+                f"  创建时间: {ctime_str}\n"
+                f"  内容: {len(lines)} 行, {char_count} 字符\n"
+                f"  前 3 行预览:\n{preview}"
+            )
+        except Exception as e:
+            return f"❌ 文件校验失败: 文件存在但读取异常 - {e}"
+
+    elif ext in (".xlsx", ".xls", ".csv"):
+        # 表格类:行列数 + 列名
+        try:
+            if ext == ".csv":
+                import pandas as pd
+                df = pd.read_csv(full_path, encoding="utf-8-sig")
+            elif ext == ".xlsx":
+                import pandas as pd
+                df = pd.read_excel(full_path, engine="openpyxl")
+            else:  # .xls
+                import pandas as pd
+                df = pd.read_excel(full_path, engine="xlrd")
+
+            rows, cols = df.shape
+            col_names = ", ".join(str(c) for c in df.columns)
+            return (
+                f"✅ 文件校验通过: {filename}\n"
+                f"  大小: {size_str}\n"
+                f"  创建时间: {ctime_str}\n"
+                f"  数据: {rows} 行 × {cols} 列\n"
+                f"  列名: {col_names}"
+            )
+        except Exception as e:
+            return f"❌ 文件校验失败: 文件存在但解析异常 - {e}"
+
+    else:
+        # 未知格式:只返回基础信息
+        return (
+            f"✅ 文件校验通过: {filename}\n"
+            f"  大小: {size_str}\n"
+            f"  创建时间: {ctime_str}"
+        )

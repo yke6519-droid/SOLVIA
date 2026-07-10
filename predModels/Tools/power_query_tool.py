@@ -345,7 +345,7 @@ def get_weather_records(
     if df is None:
         return (
             f"⏳ {info['name']} 在 {predict_date} 暂无{label}缓存数据。\n"
-            f"请先调用 get_today_weather / get_yesterday_weather / get_weather_by_range 拉取气象数据。"
+            f"请先调用 get_weather_by_range 拉取气象数据。"
         )
 
     lines = [f"{info['name']} {predict_date} {label} (共 {len(df)} 小时):"]
