@@ -1,0 +1,31 @@
+"""
+config.py - FastAPI 配置
+========================
+使用 pydantic-settings 统一读取 .env，替代散落的 os.getenv。
+对应 Spring 的 application.properties + @ConfigurationProperties。
+"""
+import os
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from dotenv import load_dotenv
+
+# 确保 solar_agent/.env 被加载
+load_dotenv()
+
+
+class Settings(BaseSettings):
+    """应用配置。只声明 FastAPI 需要的字段，其余 .env 变量自动忽略。"""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",  # 忽略 .env 中未声明的变量（API_KEY 等）
+    )
+
+    # CORS
+    cors_origins: str = "http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173"
+
+    # ask_user 超时（秒）
+    ask_user_timeout: int = 120
+
+
+settings = Settings()

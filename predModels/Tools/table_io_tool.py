@@ -7,6 +7,12 @@ table_io_tool.py - 表格导入导出工具模块 (LangChain Tools)
   1. export_table  导出光伏数据为 Excel/CSV(内部自动查缓存,未命中则预测/拉取)
   2. read_table    读取 Excel/CSV 文件并返回数据摘要
 
+公共函数(供前端 API 直接调用):
+  - export_table_to_bytes(station_name, target_date, data_type, file_format, filename)
+      生成表格字节流,前端直接下载(不落盘)
+  - read_table_from_bytes(file_bytes, filename)
+      从前端上传的字节流读取表格(不需落盘)
+
 设计说明:
   - 方式 A:工具内部自动走"查缓存→未命中则调底层函数→导出"流程
   - LLM 只传查询参数(站点+日期+类型),不需要传数据内容
@@ -14,6 +20,7 @@ table_io_tool.py - 表格导入导出工具模块 (LangChain Tools)
   - 输出目录从 .env 的 FILE_DIR 读取(与 file_io_tool 共用)
   - 默认导出 xlsx,支持 csv,校验合法性
   - 路径安全:防止 ../ 路径穿越
+  - 前端对接:支持内存字节流,无需落盘即可读写
 """
 import os
 import pandas as pd
@@ -419,3 +426,152 @@ def _generate_table_summary(df: pd.DataFrame, filename: str) -> str:
             )
 
     return "\n".join(lines)
+
+
+# ============================================================
+# 公共函数(供前端 API 直接调用)
+# ============================================================
+
+def export_table_to_bytes(
+    station_name: str,
+    target_date: str,
+    data_type: str,
+    file_format: str = "xlsx",
+    filename: str = "",
+) -> dict:
+    """
+    生成表格字节流，供前端直接下载(不落盘)。
+
+    前端对接流程:
+      后端调本函数 → 返回 {filename, bytes, format, rows, cols}
+      FastAPI 用 StreamingResponse 返回 bytes → 浏览器触发下载
+
+    参数:
+      station_name — 站点名称
+      target_date  — 日期(支持自然语言)
+      data_type    — 数据类型: actual/predicted/comparison/weather_archive/weather_forecast
+      file_format  — xlsx 或 csv(默认 xlsx)
+      filename     — 文件名(可选)
+
+    返回:
+      {
+        "filename": "英杰_20260713_实际发电量.xlsx",
+        "bytes": b"...",
+        "format": "xlsx",
+        "rows": 24,
+        "cols": 2
+      }
+    """
+    import io
+
+    file_format = _validate_format(file_format)
+
+    # 解析站点和日期
+    from predModels.Tools.power_query_tool import _resolve_station_id
+    from predModels.Tools.date_parser_tool import parse_flexible_date
+    station_id, info = _resolve_station_id(station_name)
+    predict_date = parse_flexible_date(target_date)
+
+    # 获取 DataFrame
+    df = _fetch_data(data_type, station_id, info, predict_date, station_name)
+
+    if len(df) == 0:
+        raise ToolException(f"未获取到数据: {info['name']} {predict_date} {DATA_TYPE_LABELS.get(data_type, data_type)}")
+
+    # 生成文件名
+    final_name = _resolve_filename(filename, file_format, station_name, predict_date, data_type)
+
+    # 写入内存字节流
+    buffer = io.BytesIO()
+    try:
+        if file_format == "csv":
+            df.to_csv(buffer, index=False, encoding="utf-8-sig")
+        elif file_format == "xlsx":
+            df.to_excel(buffer, index=False, engine="openpyxl")
+    except Exception as e:
+        raise ToolException(f"文件生成失败: {e}")
+
+    return {
+        "filename": final_name,
+        "bytes": buffer.getvalue(),
+        "format": file_format,
+        "rows": len(df),
+        "cols": len(df.columns),
+    }
+
+
+def read_table_from_bytes(
+    file_bytes: bytes,
+    filename: str,
+) -> dict:
+    """
+    从前端上传的字节流读取表格(不需落盘)。
+
+    前端对接流程:
+      用户上传 Excel/CSV → FastAPI 拿到 file_bytes
+      → 调本函数 → 返回 {filename, rows, cols, columns, preview, stats}
+
+    参数:
+      file_bytes — 文件字节流(前端上传)
+      filename   — 文件名(用于判断格式)
+
+    返回:
+      {
+        "filename": "英杰7月9日预测.xlsx",
+        "rows": 24,
+        "cols": 2,
+        "columns": ["时间", "预测发电量(kWh)"],
+        "preview": [{"时间": "00:00", "预测发电量(kWh)": 0.0}, ...],
+        "stats": {"预测发电量(kWh)": {"min": 0.0, "max": 174.0, "mean": 54.7}}
+      }
+    """
+    import io
+
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_READ_EXTENSIONS:
+        raise ToolException(f"不支持的文件格式: {ext}。支持 {', '.join(ALLOWED_READ_EXTENSIONS)}")
+
+    buffer = io.BytesIO(file_bytes)
+
+    try:
+        if ext == ".csv":
+            df = pd.read_csv(buffer, encoding="utf-8-sig")
+        elif ext == ".xlsx":
+            df = pd.read_excel(buffer, engine="openpyxl")
+        elif ext == ".xls":
+            df = pd.read_excel(buffer, engine="xlrd")
+    except Exception as e:
+        raise ToolException(f"文件读取失败: {e}")
+
+    # 前 5 行预览(转为 dict 列表，JSON 可序列化)
+    preview_records = []
+    for _, row in df.head(5).iterrows():
+        record = {}
+        for col in df.columns:
+            val = row[col]
+            if pd.isna(val):
+                record[col] = None
+            elif hasattr(val, "isoformat"):
+                record[col] = val.isoformat()
+            else:
+                record[col] = val
+        preview_records.append(record)
+
+    # 数值列统计
+    stats = {}
+    numeric_cols = df.select_dtypes(include=["number"]).columns
+    for col in numeric_cols:
+        stats[str(col)] = {
+            "min": round(float(df[col].min()), 2),
+            "max": round(float(df[col].max()), 2),
+            "mean": round(float(df[col].mean()), 2),
+        }
+
+    return {
+        "filename": filename,
+        "rows": len(df),
+        "cols": len(df.columns),
+        "columns": [str(c) for c in df.columns],
+        "preview": preview_records,
+        "stats": stats,
+    }

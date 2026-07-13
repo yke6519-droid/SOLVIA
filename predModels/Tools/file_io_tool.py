@@ -8,12 +8,19 @@ file_io_tool.py - 文件读写工具模块 (LangChain Tools)
   2. read_file    读取指定文件内容
   3. verify_file  校验文件是否成功生成(write_file/export_table 后必须调用)
 
+公共函数(供前端 API 直接调用):
+  - write_file_to_bytes(content, filename)
+      生成文件字节流,前端直接下载(不落盘)
+  - read_file_from_bytes(file_bytes, filename)
+      从前端上传的字节流读取内容(不需落盘)
+
 设计说明:
   - 输出目录从 .env 的 FILE_DIR 读取,不硬编码
   - 支持 .txt 和 .md 两种格式
   - 用户未指定文件名时,根据内容自动生成标题(规则提取)
   - 预留 LLM 生成标题接口(use_llm 参数),后续可升级
   - 路径安全:防止 ../ 路径穿越
+  - 前端对接:支持内存字节流,无需落盘即可读写
 """
 import os
 import re
@@ -311,3 +318,92 @@ def verify_file(
             f"  大小: {size_str}\n"
             f"  创建时间: {ctime_str}"
         )
+
+
+# ============================================================
+# 公共函数(供前端 API 直接调用)
+# ============================================================
+
+def write_file_to_bytes(
+    content: str,
+    filename: str = "",
+) -> dict:
+    """
+    生成文本文件字节流，供前端直接下载(不落盘)。
+
+    前端对接流程:
+      后端调本函数 → 返回 {filename, bytes, format}
+      FastAPI 用 StreamingResponse 返回 bytes → 浏览器触发下载
+
+    参数:
+      content  — 文件内容
+      filename — 文件名(可选，不传则自动生成)
+
+    返回:
+      {
+        "filename": "英杰发电分析.txt",
+        "bytes": b"...",
+        "format": "txt",
+        "size": 1234
+      }
+    """
+    # 处理文件名
+    if filename.strip():
+        filename = _sanitize_filename(filename.strip())
+        filename = _ensure_extension(filename)
+    else:
+        filename = _generate_filename(content) + ".txt"
+
+    file_bytes = content.encode("utf-8")
+    ext = os.path.splitext(filename)[1].lstrip(".")
+
+    return {
+        "filename": filename,
+        "bytes": file_bytes,
+        "format": ext,
+        "size": len(file_bytes),
+    }
+
+
+def read_file_from_bytes(
+    file_bytes: bytes,
+    filename: str,
+) -> dict:
+    """
+    从前端上传的字节流读取文本文件内容(不需落盘)。
+
+    前端对接流程:
+      用户上传文件 → FastAPI 拿到 file_bytes
+      → 调本函数 → 返回 {content, filename, rows, chars}
+
+    参数:
+      file_bytes — 文件字节流(前端上传)
+      filename   — 文件名(用于判断格式)
+
+    返回:
+      {
+        "filename": "英杰发电分析.txt",
+        "content": "文件完整内容...",
+        "rows": 42,
+        "chars": 1234,
+        "format": "txt"
+      }
+    """
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise ToolException(f"不支持的文件格式: {ext}。支持 {', '.join(ALLOWED_EXTENSIONS)}")
+
+    try:
+        content = file_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        content = file_bytes.decode("gbk", errors="replace")
+
+    lines = content.splitlines()
+
+    return {
+        "filename": filename,
+        "content": content,
+        "rows": len(lines),
+        "chars": len(content),
+        "format": ext.lstrip("."),
+    }

@@ -20,10 +20,15 @@ cache_manager.py - 缓存管理模块
 import pandas as pd
 from typing import Optional
 from sqlalchemy import create_engine, text
+from dotenv import load_dotenv
+import os
+
+
+load_dotenv()
 
 # 复用 weather_fetcher_tool 里的 MySQL 连接配置
 # (两个文件都在 predModels/Tools/ 下,配置保持一致)
-MYSQL_URL = "mysql+pymysql://root:755028@localhost:3306/solar_agent?charset=utf8mb4"
+MYSQL_URL = os.getenv("MYSQL_URL")
 
 # 气象字段列表(open-meteo 拉取后的字段,风分量已转换)
 WEATHER_FIELDS = [

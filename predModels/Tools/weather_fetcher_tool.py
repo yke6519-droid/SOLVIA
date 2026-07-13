@@ -29,6 +29,9 @@ import requests
 from datetime import datetime, timedelta
 from typing import Annotated
 from langchain_core.tools import tool, ToolException
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
 __all__ = [
     "fetch_weather_by_date",
@@ -57,7 +60,7 @@ ARCHIVE_API = "https://archive-api.open-meteo.com/v1/archive"
 FORECAST_API = "https://api.open-meteo.com/v1/forecast"
 
 # MySQL 连接配置（用于从 solar_station 表读取站点信息）
-MYSQL_URL = "mysql+pymysql://root:755028@localhost:3306/solar_agent?charset=utf8mb4"
+MYSQL_URL = os.getenv("MYSQL_URL")
 
 
 def _load_stations_from_db() -> dict:

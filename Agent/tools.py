@@ -20,6 +20,8 @@ from predModels.Tools.table_io_tool import export_table, read_table
 from predModels.Tools.knowledge_base_tool import search_knowledge_base
 from predModels.Tools.date_parser_tool import parse_date
 from predModels.Tools.ask_user_tool import ask_user
+from predModels.Tools.chart_tool import get_power_chart_data
+from predModels.Tools.import_tool import import_power_data
 
 ALL_TOOLS = [
     # 站点查询类
@@ -49,6 +51,10 @@ ALL_TOOLS = [
     search_knowledge_base,
     # 用户交互类
     ask_user,
+    # 可视化数据类
+    get_power_chart_data,
+    # 数据导入类
+    import_power_data,
 ]
 
 def get_all_tools():
