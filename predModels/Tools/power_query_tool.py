@@ -122,6 +122,34 @@ def _query_actual_power(station_id: str, predict_date: str) -> pd.DataFrame:
     return df
 
 
+def _query_actual_power_range(station_id: str, start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    查询某站点日期范围内的全部原始发电量记录(逐小时)。
+
+    由 table_io_tool._fetch_data 调用,用于范围导出 Excel。
+    不做天汇总,返回每条原始记录,供 LLM 和用户做自定义分析。
+
+    参数:
+        station_id: 站点ID
+        start_date: 起始日期 "YYYY-MM-DD"
+        end_date: 结束日期 "YYYY-MM-DD"
+
+    返回:
+        DataFrame(record_time, power_kwh),无数据则返回空 DataFrame
+    """
+    engine = create_engine(MYSQL_URL)
+    query = text("""
+        SELECT record_time, power_kwh
+        FROM power_generation
+        WHERE station_id = :sid
+          AND DATE(record_time) BETWEEN :start AND :end
+        ORDER BY record_time
+    """)
+    with engine.connect() as conn:
+        df = pd.read_sql(query, conn, params={"sid": station_id, "start": start_date, "end": end_date})
+    return df
+
+
 # ============================================================
 # 辅助函数
 # ============================================================

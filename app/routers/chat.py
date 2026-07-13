@@ -18,11 +18,12 @@ SSE 事件类型:
 import json
 import asyncio
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from sse_starlette.sse import EventSourceResponse
 
 from app.schemas.chat import ChatRequest, ReplyRequest
 from app.services.agent_manager import agent_manager
+from app.routers.sessions import _verify_session_ownership
 
 router = APIRouter(prefix="/api", tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -72,7 +73,10 @@ async def chat_stream(req: ChatRequest):
       4. yield SSE 事件给前端
       5. 结束后异步触发摘要
     """
-    executor = agent_manager.get_agent(req.session_id)
+    # 校验当前会话是否为当前登录用户所拥有
+    _verify_session_ownership(req.session_id, req.user_id)
+    # 初始化创建一个 Agent 的执行 engine
+    executor = agent_manager.get_agent(req.session_id, user_id=req.user_id)
     bridge = agent_manager.get_or_create_bridge(req.session_id)
 
     async def event_generator():
@@ -145,7 +149,8 @@ async def chat_stream(req: ChatRequest):
 @router.post("/chat")
 async def chat(req: ChatRequest):
     """非流式对话。不支持 ask_user 交互（ask_user 会得到空回复）。"""
-    executor = agent_manager.get_agent(req.session_id)
+    _verify_session_ownership(req.session_id, req.user_id)
+    executor = agent_manager.get_agent(req.session_id, user_id=req.user_id)
 
     result = await asyncio.to_thread(executor.invoke, {"input": req.message})
     output = result.get("output", str(result)) if isinstance(result, dict) else str(result)
@@ -158,8 +163,14 @@ async def chat(req: ChatRequest):
 # ask_user 回复
 # ============================================================
 @router.post("/chat/{session_id}/reply")
-async def reply_to_question(session_id: str, req: ReplyRequest):
-    """回复 ask_user 提问，解除 Agent 工具线程的阻塞。"""
+async def reply_to_question(
+    session_id: str,
+    req: ReplyRequest,
+    user_id: int = Query(..., description="用户ID，必传，校验会话所有权"),
+):
+    """回复 ask_user 提问，解除 Agent 工具线程的阻塞。校验会话所有权。"""
+    _verify_session_ownership(session_id, user_id)
+
     bridge = agent_manager.get_bridge(session_id)
     if bridge is None:
         raise HTTPException(404, detail="会话不存在")

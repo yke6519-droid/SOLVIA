@@ -7,14 +7,10 @@ memory.py - Agent 多轮对话记忆模块
   1. 只追加不删除 — message_store 只 INSERT, 窗口在读取时截取
   2. 零阻塞 — 摘要异步生成, 不阻塞对话主链路
   3. 持久化 — 摘要和消息都落 MySQL, 重启可恢复
-  4. Redis 预留 — 热数据缓存接口已留, 后续接入即可
+  4. 用户隔离 — 每条消息携带 user_id, 可按用户查询会话
 
 测试环境: use_db=False, 纯内存
 生产环境: use_db=True, MySQL 持久化
-
-FastAPI 集成预留:
-  - 同步 maybe_summarize(): 供 CLI 和 BackgroundTasks 使用
-  - 异步 amaybe_summarize(): 供 asyncio.create_task 使用
 """
 import os
 import json
@@ -29,24 +25,42 @@ from langchain.memory.summary import SummarizerMixin
 logger = logging.getLogger(__name__)
 
 # ============================================================
-# 自定义 SQL 消息转换器
+# 自定义 SQL 消息转换器（带 user_id）
 # ============================================================
-# 用 ensure_ascii=False 存储原始中文。
+# 用 ensure_ascii=False 存储原始中文，同时携带 user_id 实现用户隔离。
 
-from langchain_community.chat_message_histories.sql import (
-    DefaultMessageConverter,
-    create_message_model,
-)
+from langchain_community.chat_message_histories.sql import DefaultMessageConverter
 from sqlalchemy.orm import declarative_base
+from sqlalchemy import Column, Integer, Text, String, DateTime, BigInteger, func
+
+
+# 自定义 ORM Model，比 LangChain 默认多一个 user_id 列
+ConverterBase = declarative_base()
+
+
+class UserAwareMessage(ConverterBase):
+    """message_store 的 ORM 映射，额外携带 user_id 列。"""
+    __tablename__ = "message_store"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(255), nullable=False, index=True)
+    user_id = Column(BigInteger, nullable=True, index=True)
+    message = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
 
 
 class ChineseFriendlyConverter(DefaultMessageConverter):
-    """支持中文原文存储的 SQL 消息转换器"""
+    """支持中文原文存储 + user_id 的 SQL 消息转换器"""
+
+    def __init__(self, table_name: str, user_id: Optional[int] = None):
+        # 不调用 super().__init__，避免创建不含 user_id 的默认 model
+        self._user_id = user_id
+        self.model_class = UserAwareMessage
 
     def to_sql_model(self, message: BaseMessage, session_id: str) -> Any:
         from langchain_core.messages import message_to_dict
         return self.model_class(
             session_id=session_id,
+            user_id=self._user_id,
             message=json.dumps(message_to_dict(message), ensure_ascii=False)
         )
 
@@ -63,21 +77,15 @@ class PersistentWindowSummaryMemory(BaseChatMemory, SummarizerMixin):
     - 更早的对话用 LLM 总结成摘要
     - 消息和摘要都持久化到 MySQL, 重启可恢复
     - 摘要异步触发, 不阻塞对话
-
-    Redis 预留:
-        未来在 _load_summary 和 load_memory_variables 中
-        先查 Redis 缓存, 未命中再查 MySQL。
-        接入方式: 在 build_memory 中传入 redis_client,
-        在读取方法中加缓存逻辑。
+    - 每条消息携带 user_id, 实现用户隔离
     """
 
     k: int = 3
     memory_key: str = "chat_history"
     summarize_threshold: int = 4  # 超出窗口多少条才触发摘要
     db_url: Optional[str] = None
-    # todo 这里session_id的进一步优化点：前端强制将session_id
-    #  拼接成为： userId_sessionId 的 格式提交给后端，这样能实现同一用户不同会话的分隔
     session_id: str = "default"
+    user_id: Optional[int] = None  # 消息所有者ID,用于用户隔离
     moving_summary_buffer: str = ""  # 内存模式下的摘要
 
     @property
@@ -96,8 +104,6 @@ class PersistentWindowSummaryMemory(BaseChatMemory, SummarizerMixin):
           2. 从 agent_summary_store 读取摘要 (1 次 SELECT)
           3. 截取最近 2*k 条作为窗口 (内存操作)
           4. 拼装: 摘要在前 + 窗口消息在后
-
-        Redis 预留: 未来在此处先查 Redis 缓存
         """
         # 1. 读取全部消息
         all_messages = self.chat_memory.messages
@@ -176,8 +182,6 @@ class PersistentWindowSummaryMemory(BaseChatMemory, SummarizerMixin):
         读取摘要。
         生产环境: 从 MySQL agent_summary_store 读取。
         测试环境: 从内存属性 moving_summary_buffer 读取。
-
-        Redis 预留: 未来在此处先查 Redis, 未命中再查 MySQL
         """
         if not self.db_url:
             return self.moving_summary_buffer
@@ -198,7 +202,7 @@ class PersistentWindowSummaryMemory(BaseChatMemory, SummarizerMixin):
     def _save_summary(self, summary: str):
         """
         保存摘要。
-        生产环境: UPSERT 到 MySQL agent_summary_store。
+        生产环境: UPSERT 到 MySQL agent_summary_store（含 user_id）。
         测试环境: 写入内存属性 moving_summary_buffer。
         """
         if not self.db_url:
@@ -210,10 +214,10 @@ class PersistentWindowSummaryMemory(BaseChatMemory, SummarizerMixin):
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    """INSERT INTO agent_summary_store (session_id, summary)
-                       VALUES (%s, %s)
+                    """INSERT INTO agent_summary_store (session_id, user_id, summary)
+                       VALUES (%s, %s, %s)
                        ON DUPLICATE KEY UPDATE summary=%s""",
-                    (self.session_id, summary, summary)
+                    (self.session_id, self.user_id, summary, summary)
                 )
             conn.commit()
         finally:
@@ -288,23 +292,16 @@ def build_memory(
     session_id: str = "test",
     use_db: bool = False,
     llm: Optional[BaseLanguageModel] = None,
+    user_id: Optional[int] = None,
 ) -> PersistentWindowSummaryMemory:
     """
     构建 Agent 记忆。
 
     参数:
-        session_id: 会话标识。生产环境传 "用户ID_会话ID"
+        session_id: 会话标识
         use_db: True=MySQL持久化, False=纯内存(测试)
         llm: 用于摘要的 LLM。不传则内部创建
-
-    FastAPI 集成预留:
-        同步: memory.maybe_summarize() — 供 BackgroundTasks 使用
-        异步: await memory.amaybe_summarize() — 供 asyncio.create_task 使用
-
-    Redis 预留:
-        未来在此函数中注入 RedisChatMessageHistory 或在
-        PersistentWindowSummaryMemory 中加 redis_cache 属性。
-        当前先用 SQLChatMessageHistory, 接口兼容。
+        user_id: 用户ID,用于消息所有者隔离。None 时消息不绑定用户
     """
 
     # 如果未传入 LLM, 内部创建 (用于摘要生成)
@@ -315,12 +312,12 @@ def build_memory(
     if use_db:
         from langchain_community.chat_message_histories import SQLChatMessageHistory
         db_url = os.getenv("MYSQL_URL")
-        # 使用自定义 converter, 让中文以原文存储 (非 \uXXXX 转义)
+        # 使用自定义 converter, 让中文以原文存储 (非 \uXXXX 转义), 同时携带 user_id
         chat_memory = SQLChatMessageHistory(
             session_id=session_id,
             connection_string=db_url,
             table_name="message_store",
-            custom_message_converter=ChineseFriendlyConverter("message_store"),
+            custom_message_converter=ChineseFriendlyConverter("message_store", user_id=user_id),
         )
     else:
         from langchain_core.chat_history import InMemoryChatMessageHistory
@@ -335,5 +332,6 @@ def build_memory(
         return_messages=True,
         db_url=db_url,
         session_id=session_id,
+        user_id=user_id,
         prompt=CUSTOM_SUMMARY_PROMPT
     )

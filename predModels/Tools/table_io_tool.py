@@ -136,11 +136,18 @@ def _list_files_in_dir() -> list:
         return []
 
 
-def _format_time_column(df: pd.DataFrame, time_col: str) -> pd.DataFrame:
-    """把时间列格式化为 HH:MM 字符串。"""
+def _format_time_column(df: pd.DataFrame, time_col: str, fmt: str = "%H:%M") -> pd.DataFrame:
+    """把时间列格式化为指定格式的字符串。
+
+    参数:
+        df: 数据
+        time_col: 时间列名
+        fmt: strftime 格式字符串,默认 "%H:%M"
+             单日导出用 "%Y-%m-%d %H:%M" 保留完整日期时间
+    """
     df = df.copy()
     df[time_col] = pd.to_datetime(df[time_col])
-    df[time_col] = df[time_col].dt.strftime("%H:%M")
+    df[time_col] = df[time_col].dt.strftime(fmt)
     return df
 
 
@@ -174,12 +181,17 @@ def export_table(
     data_type: Annotated[str, "数据类型: 'actual'=实际发电量, 'predicted'=预测发电量, 'comparison'=预测vs实际对比, 'weather_archive'=历史气象, 'weather_forecast'=预报气象"],
     file_format: Annotated[str, "文件格式: 'xlsx' 或 'csv',默认 xlsx"] = "xlsx",
     filename: Annotated[str, "文件名(可选),不传则自动生成"] = "",
+    end_date: Annotated[str, "结束日期(可选),支持 'YYYY-MM-DD'、'6月1日' 等。传入时 target_date 作为起始日期,导出日期范围内的全部原始逐小时数据。仅对 data_type='actual' 有效"] = "",
 ) -> str:
     """导出光伏数据为 Excel 或 CSV 文件。
 
     支持场景:用户要求导出、下载、保存表格数据时调用。
     内部自动查缓存,缓存未命中时自动预测/拉取数据,无需用户额外操作。
     默认导出 xlsx 格式,也可指定 csv。
+
+    日期范围导出:
+        当传入 end_date 时,target_date 作为起始日期,导出范围内全部原始逐小时数据。
+        仅对 data_type='actual' 有效,其他类型忽略 end_date。
 
     返回:
         写入成功后的文件完整路径
@@ -198,15 +210,17 @@ def export_table(
     from predModels.Tools.date_parser_tool import parse_flexible_date
     station_id, info = _resolve_station_id(station_name)
     predict_date = parse_flexible_date(target_date)
+    parsed_end_date = parse_flexible_date(end_date) if end_date.strip() else None
 
     # 根据数据类型获取 DataFrame
-    df = _fetch_data(data_type, station_id, info, predict_date, station_name)
+    df = _fetch_data(data_type, station_id, info, predict_date, station_name, parsed_end_date)
 
     if len(df) == 0:
         raise ToolException(f"未获取到数据: {info['name']} {predict_date} {DATA_TYPE_LABELS.get(data_type, data_type)}")
 
     # 生成文件名和路径
-    final_name = _resolve_filename(filename, file_format, station_name, predict_date, data_type)
+    date_for_name = f"{predict_date}_{parsed_end_date}" if parsed_end_date else predict_date
+    final_name = _resolve_filename(filename, file_format, station_name, date_for_name, data_type)
     filepath = os.path.join(FILE_DIR, final_name)
     filepath = _get_unique_filepath(filepath)
 
@@ -276,27 +290,44 @@ def _fetch_data(
     info: dict,
     predict_date: str,
     station_name: str,
+    end_date: str = None,
 ) -> pd.DataFrame:
     """
     根据 data_type 获取 DataFrame。
     内部自动走"查缓存→未命中则调底层函数"流程。
+
+    参数:
+        end_date: 结束日期(可选),仅 data_type='actual' 时有效,
+                  传入则导出日期范围内的全部原始逐小时数据
     """
     from predModels.Tools.cache_manager import (
         read_prediction_cache, read_archive_cache, read_forecast_cache,
     )
-    from predModels.Tools.power_query_tool import _query_actual_power
+    from predModels.Tools.power_query_tool import _query_actual_power, _query_actual_power_range
 
     if data_type == "actual":
-        # 实际发电量:直接查 MySQL,无缓存层
-        df = _query_actual_power(station_id, predict_date)
-        if len(df) == 0:
+        if end_date:
+            # 日期范围导出:全部原始逐小时数据
+            df = _query_actual_power_range(station_id, predict_date, end_date)
+            if len(df) == 0:
+                return df
+            df = _format_time_column(df, "record_time", fmt="%Y-%m-%d %H:%M")
+            df.rename(columns={
+                "record_time": "时间",
+                "power_kwh": "实际发电量(kWh)",
+            }, inplace=True)
             return df
-        df = _format_time_column(df, "record_time")
-        df.rename(columns={
-            "record_time": "时间",
-            "power_kwh": "实际发电量(kWh)",
-        }, inplace=True)
-        return df
+        else:
+            # 单日导出:24小时明细,保留完整日期时间
+            df = _query_actual_power(station_id, predict_date)
+            if len(df) == 0:
+                return df
+            df = _format_time_column(df, "record_time", fmt="%Y-%m-%d %H:%M")
+            df.rename(columns={
+                "record_time": "时间",
+                "power_kwh": "实际发电量(kWh)",
+            }, inplace=True)
+            return df
 
     elif data_type == "predicted":
         # 预测发电量:先查缓存,未命中则调底层预测函数
@@ -438,6 +469,7 @@ def export_table_to_bytes(
     data_type: str,
     file_format: str = "xlsx",
     filename: str = "",
+    end_date: str = "",
 ) -> dict:
     """
     生成表格字节流，供前端直接下载(不落盘)。
@@ -452,6 +484,7 @@ def export_table_to_bytes(
       data_type    — 数据类型: actual/predicted/comparison/weather_archive/weather_forecast
       file_format  — xlsx 或 csv(默认 xlsx)
       filename     — 文件名(可选)
+      end_date     — 结束日期(可选),传入时 target_date 作为起始日期,导出范围数据
 
     返回:
       {
@@ -471,15 +504,17 @@ def export_table_to_bytes(
     from predModels.Tools.date_parser_tool import parse_flexible_date
     station_id, info = _resolve_station_id(station_name)
     predict_date = parse_flexible_date(target_date)
+    parsed_end_date = parse_flexible_date(end_date) if end_date.strip() else None
 
     # 获取 DataFrame
-    df = _fetch_data(data_type, station_id, info, predict_date, station_name)
+    df = _fetch_data(data_type, station_id, info, predict_date, station_name, parsed_end_date)
 
     if len(df) == 0:
         raise ToolException(f"未获取到数据: {info['name']} {predict_date} {DATA_TYPE_LABELS.get(data_type, data_type)}")
 
     # 生成文件名
-    final_name = _resolve_filename(filename, file_format, station_name, predict_date, data_type)
+    date_for_name = f"{predict_date}_{parsed_end_date}" if parsed_end_date else predict_date
+    final_name = _resolve_filename(filename, file_format, station_name, date_for_name, data_type)
 
     # 写入内存字节流
     buffer = io.BytesIO()

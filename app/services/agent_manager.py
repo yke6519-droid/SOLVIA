@@ -57,19 +57,19 @@ class AgentManager:
         logger.warning("[AgentManager] ask_user 被调用但无活跃 bridge，返回空")
         return ""
 
-    def create_session(self) -> str:
+    def create_session(self, user_id: Optional[int] = None) -> str:
         """创建新会话，返回 session_id。"""
         session_id = str(uuid.uuid4())[:8]
-        # 预构建 AgentExecutor 并缓存
-        executor = build_agent(session_id=session_id, use_db=True)
+        # 预构建 AgentExecutor 并缓存，绑定 user_id
+        executor = build_agent(session_id=session_id, use_db=True, user_id=user_id)
         self._agents[session_id] = executor
-        logger.info(f"[AgentManager] 新建会话: {session_id}")
+        logger.info(f"[AgentManager] 新建会话: {session_id}, user_id={user_id}")
         return session_id
 
-    def get_agent(self, session_id: str):
+    def get_agent(self, session_id: str, user_id: Optional[int] = None):
         """获取或创建 AgentExecutor。"""
         if session_id not in self._agents:
-            executor = build_agent(session_id=session_id, use_db=True)
+            executor = build_agent(session_id=session_id, use_db=True, user_id=user_id)
             self._agents[session_id] = executor
         return self._agents[session_id]
 
