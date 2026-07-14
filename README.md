@@ -1,110 +1,291 @@
-# SolarAgent 光伏智能调度预测智能体系统
-## 项目简介
-`SolarAgent` 是一套面向工厂分布式光伏场景的**智能体光伏预测与数据调度系统**，基于大语言模型构建自主决策 Agent，实现光伏发电量预测、气象数据查询、电力负荷查询、SQL 数据缓存管理、持久化多轮对话记忆一体化自动化流程。
+# SolarAgent
 
-项目核心解决传统光伏预测固定时段、数据零散、查询繁琐、长对话上下文易丢失的痛点，支持用户自定义任意日期区间做光伏出力预测，自动持久化气象、发电预测结果与对话记忆至数据库，提供可复用工具插件化架构，便于扩展更多能源业务工具。
+SolarAgent 是一个面向光伏电站场景的智能分析 Agent。系统通过大语言模型理解用户意图，调用气象、发电量、预测、缓存、文件和知识库工具，完成光伏站点查询、发电预测、历史回测和数据分析。
 
-## 技术栈
-### 后端核心
-- Python 3.11
-- LLM 大模型：通义千问 / Qwen 系列
-- Agent 框架：自研模块化 Agent（提示词管理、记忆存储、工具调用、执行入口解耦）
-- 预测模型：XGBoost / LightGBM / LSTM 多模型融合光伏预测 `predModels`
-- 数据存储：SQLite / MySQL（缓存数据表、对话记忆表预定义 SQL）
-### 工程配套
-- Git 版本管理，Windows 开发环境
-- 虚拟环境 `.venv` 隔离依赖
-- 工具插件化设计：气象查询、发电量查询、缓存管理独立工具类
+项目定位不是单纯的聊天机器人，而是一个具备生产产品雏形的 Agent 系统：有用户认证、会话隔离、持久化记忆、工具调用、人工确认、数据缓存和结果验证等完整链路。
 
-## 项目目录结构
+## 当前版本能力
+
+### 1. 光伏业务能力
+
+- 查询站点基本信息、站点位置和装机容量。
+- 查询历史实际发电量和发电量区间。
+- 获取历史气象实况和未来天气预报。
+- 执行光伏发电量预测。
+- 对比预测发电量与实际发电量，并输出偏差、MAE、RMSE、MAPE 等指标。
+- 支持历史日期的实况回测模式。
+- 支持未来日期的天气预报模式。
+- 预测结果、气象数据和发电数据使用数据库缓存，减少重复请求和重复计算。
+- 支持表格读写、文件生成、文件验证和发电数据导入。
+- 支持知识库检索和图表数据生成。
+
+### 2. Agent 能力
+
+- 基于工具调用完成多步骤业务任务。
+- 使用系统日期上下文，避免“5月1日”被错误解释为旧年份。
+- 日期先经过 `parse_date` 统一转换为 `YYYY-MM-DD`。
+- 站点名称模糊或匹配多个站点时，通过 `ask_user` 请求用户确认。
+- 发电预测前要求用户核对站点和日期。
+- Agent 只有在真正调用工具并获得结果后，才能向用户声明任务进度或结果。
+- 支持连续多轮对话，并将会话记忆持久化到 MySQL。
+- 使用滑动窗口和摘要机制控制长期对话的 Token 消耗。
+
+### 3. 安全能力
+
+- 使用 JWT Bearer Token 认证。
+- 用户身份从服务端 Token 中解析，不信任前端传入的 `user_id`。
+- 使用 Argon2id 保存密码哈希，不再保留旧哈希算法兼容逻辑。
+- 会话、消息和长期记忆按照用户进行隔离。
+- 每个 Agent 会话绑定独立的 `session_id`。
+- AskUser 交互按照会话路由，避免跨用户或跨会话响应。
+- 敏感配置通过 `.env` 管理，不应提交真实密钥到 Git。
+
+## 系统架构
+
+```text
+用户 / 未来 Vue 前端
+        |
+        | JWT + HTTP / SSE
+        v
+FastAPI API 层
+  ├── auth       注册、登录、Token
+  ├── chat       普通对话、SSE 流式对话
+  └── sessions   会话创建、查询和历史消息
+        |
+        v
+Agent Manager
+  ├── Agent 构建
+  ├── 用户与会话隔离
+  ├── AskUserBridge
+  └── 长期记忆加载与保存
+        |
+        v
+LLM + 工具调用
+  ├── 日期与站点工具
+  ├── 气象数据工具
+  ├── 光伏预测工具
+  ├── 发电量查询工具
+  ├── 文件与表格工具
+  ├── 知识库工具
+  └── 用户确认工具
+        |
+        v
+MySQL / SQLite
+  ├── 用户与认证数据
+  ├── 会话和消息
+  ├── 长期记忆与摘要
+  ├── 发电量数据
+  └── 气象、预测和回测缓存
 ```
+
+## 主要目录
+
+```text
 solar_agent/
-├── Agent/                      # 智能Agent核心框架（原agent文件夹重命名）
-│   ├── __init__.py
-│   ├── agent.py                # Agent主调度逻辑，工具调用循环
-│   ├── llm.py                 # 大模型对话封装
-│   ├── prompt.py              # 系统提示词、角色定义
-│   ├── memory.py              # 新增：滑动窗口摘要持久化对话记忆
-│   ├── tools.py               # 工具统一注册与分发
-│   └── run.py                 # 程序启动入口
-├── predModels/                 # 光伏预测模型模块
-│   ├── pv_predictor.py        # 光伏发电预测核心
-│   └── Tools/                 # 业务工具集
-│       ├── weather_fetcher_tool.py   # 气象数据获取工具
-│       ├── power_query_tool.py      # 电力/发电量查询工具
-│       └── cache_manager.py         # SQL缓存读写管理工具
-├── sql/                        # 数据库初始化脚本
-│   ├── init_schema.sql         # 基础数据表建表语句
-│   ├── cache_schema.sql        # 预测、气象数据缓存表
-│   └── memory_schema.sql       # 新增：对话记忆、摘要存储数据表
-├── temp/                       # 临时测试脚本
-│   ├── LLM.py
-│   ├── conversationSummaryBufferMemory.py
-│   └── helloQwen.py
-├── .venv/                      # Python虚拟环境
-├── .gitignore                  # 新增：屏蔽pycache编译缓存文件
-└── README.md                   # 项目说明文档
+├── Agent/
+│   ├── agent.py                 Agent 构建和执行逻辑
+│   ├── llm.py                   OpenAI 兼容协议的大模型客户端
+│   ├── prompt.py                系统提示词和工具调用规则
+│   ├── memory.py                会话记忆、滑动窗口和摘要
+│   ├── tools.py                 工具统一注册
+│   └── run.py                   Agent 命令行入口
+├── app/
+│   ├── main.py                  FastAPI 应用入口和内置测试页面
+│   ├── routers/
+│   │   ├── auth.py              注册、登录和 Token
+│   │   ├── chat.py              对话和 SSE 流式响应
+│   │   └── sessions.py          会话接口
+│   ├── services/
+│   │   ├── agent_manager.py     Agent 生命周期和会话绑定
+│   │   ├── ask_user_bridge.py   同步 Agent 与异步前端的交互桥
+│   │   ├── auth_service.py      JWT 和 Argon2id
+│   │   └── user_service.py      用户和数据隔离
+│   ├── dependencies/auth.py     当前用户依赖注入
+│   └── schemas/                 API 请求和响应模型
+├── predModels/
+│   └── Tools/
+│       ├── pv_predictor.py      光伏预测和历史回测
+│       ├── weather_fetcher_tool.py 气象数据获取
+│       ├── power_query_tool.py  发电量查询
+│       ├── cache_manager.py     预测和气象缓存
+│       ├── ask_user_tool.py     用户确认工具
+│       ├── import_tool.py       发电数据导入
+│       ├── table_io_tool.py     表格处理
+│       ├── file_io_tool.py      文件生成和验证
+│       └── knowledge_base_tool.py 知识库检索
+├── sql/
+│   ├── init_schema.sql          基础业务表
+│   ├── cache_schema.sql         气象和预测缓存表
+│   ├── memory_schema.sql        会话记忆表
+│   └── migrations/              增量数据库迁移脚本
+├── tests/                       阶段性契约测试
+├── docs/                        交接、架构和学习文档
+├── .env                         本地环境变量，不提交真实密钥
+└── requirements.txt             固定版本依赖
 ```
 
-## 核心功能更新
-### 原有基础功能
-1. **完整 Agent 框架搭建**
-    分层解耦大模型交互、记忆、提示词、工具调度，形成可复用智能体骨架。
-2. **插件式业务工具调用**
-    封装气象查询、光伏出力查询、数据缓存工具，Agent 自动识别并调用对应工具完成用户指令。
-3. **预测数据持久化优化**
-    完成光伏发电预测、气象数据查询后，自动将结果存入数据库缓存，避免重复请求与重复计算。
-4. **灵活时间区间预测**
-    破除固定当日预测限制，支持用户自定义任意起止日期进行光伏出力预测与历史数据查询。
+## 关键业务链路
 
-### 本次迭代新增记忆相关能力
-1. **多轮连贯对话交互**
-    单进程内完整保存人机对话上下文，支持连续多轮问答交互。
-2. **MySQL 双层对话记忆持久化**
-    新增专用建表脚本，分别存储完整原始对话记录与压缩摘要，进程重启后历史记忆不丢失。
-3. **SessionID 会话隔离**
-    通过会话标识区分不同用户对话，各会话记忆数据独立互不干扰。
-4. **滑动窗口自动摘要机制**
-    保留窗口内最新完整对话，超出阈值自动调用大模型生成历史摘要，降低上下文 Token 消耗，预留记忆分层扩展接口。
-5. **工程规范优化**
-    新增 gitignore 过滤编译缓存文件，统一代码换行适配 Windows 开发环境。
+### 普通对话
 
-## 快速启动
-### 1. 环境准备
+```text
+登录获取 JWT
+  -> 创建或选择 session_id
+  -> POST /api/chat/stream
+  -> Agent 读取会话记忆
+  -> LLM 判断意图
+  -> 调用业务工具
+  -> SSE 返回过程事件和最终结果
+  -> 保存消息与记忆
+```
+
+### AskUser 用户确认
+
+```text
+Agent 发现站点或日期不明确
+  -> 调用 ask_user
+  -> AskUserBridge 暂停当前 Agent 线程
+  -> SSE 通道通知前端弹出问题
+  -> 用户提交回答
+  -> 后端按 session_id 唤醒对应 Bridge
+  -> Agent 继续执行后续工具
+```
+
+### 历史回测
+
+```text
+用户请求过去日期预测
+  -> 判断目标日期早于当前日期
+  -> 使用历史气象实况接口
+  -> 标记 weather_data_mode=historical_actual
+  -> 生成预测结果
+  -> 查询实际发电量
+  -> 输出预测与实际对比
+```
+
+未来日期则使用天气预报接口，并标记为 `forecast`。两种模式使用独立缓存，避免历史实况和未来预报相互污染。
+
+## 预测缓存迁移
+
+历史回测模式使用了 `prediction_cache.weather_data_mode` 字段。已有数据库需要执行一次迁移：
+
+```text
+sql/migrations/002_prediction_weather_data_mode.sql
+```
+
+迁移后，预测缓存按照以下模式区分：
+
+- `historical_actual`：历史实况回测。
+- `forecast`：未来天气预报预测。
+
+如果已经清理过旧缓存，仍然需要执行数据库结构迁移，因为代码会查询新的模式字段。
+
+## 环境准备
+
+项目使用现有虚拟环境，不需要重建：
+
 ```powershell
-# 进入项目目录
 cd D:\AAA_myProjects\howso\myAgent\solar_agent
-# 激活虚拟环境
-.venv\Scripts\Activate.ps1
-# 安装依赖（自行补充requirements.txt）
-pip install -r requirements.txt
+$python = "D:\AAA_myProjects\howso\myAgent\solar_agent\.venv\Scripts\python.exe"
+& $python -m pip install -r requirements.txt
 ```
 
-### 2. 数据库初始化
-依次执行 `sql/init_schema.sql`、`sql/cache_schema.sql`、`sql/memory_schema.sql` 完成全部数据表创建，支持 MySQL / SQLite。
+`.env` 至少需要根据本地环境配置以下内容：
 
-### 3. 运行智能Agent
+```env
+API_KEY=your_api_key
+BASE_URL=https://your-openai-compatible-endpoint/v1
+MODEL_NAME=your_model_name
+MYSQL_URL=your_mysql_connection_string
+JWT_SECRET_KEY=your_long_random_secret
+JWT_ACCESS_TOKEN_EXPIRE_SECONDS=3600
+ASK_USER_TIMEOUT=120
+```
+
+不要把真实 API Key、数据库密码或 JWT 密钥提交到 Git 仓库。
+
+## 启动方式
+
+### 启动 FastAPI 服务
+
 ```powershell
-python Agent/run.py
+cd D:\AAA_myProjects\howso\myAgent\solar_agent
+$python = "D:\AAA_myProjects\howso\myAgent\solar_agent\.venv\Scripts\python.exe"
+& $python app\main.py
 ```
 
-## 工具模块说明
-| 工具 | 功能 |
-|------|------|
-| weather_fetcher_tool | 获取指定时间段气象数据（辐照度、温度、湿度等光伏输入特征） |
-| power_query_tool | 查询历史光伏发电量、厂区负荷数据 |
-| cache_manager | 将预测结果、气象原始数据写入数据库缓存，提供查询接口 |
+服务启动后可以访问：
 
-## Git 开发记录说明
-1. 目录重构：将小写 `agent/` 重命名为 `Agent/` 规范模块命名
-2. 新增对话记忆全套代码、数据库脚本与测试文件，完善仓库忽略规则
-3. 远程仓库存在历史提交，推送前需执行 pull 合并代码避免冲突；GitHub 443端口连接超时可使用 ghproxy 镜像加速推送
+- API 文档：`http://127.0.0.1:8000/docs`
+- 内置测试页面：`http://127.0.0.1:8000/`
+- 流式对话：`POST /api/chat/stream`
+- 普通对话：`POST /api/chat`
+- 注册：`POST /api/auth/register`
+- 登录：`POST /api/auth/login`
 
-## 后续规划
-1. 优化对话记忆逻辑，增加多轮对话上下文纠错能力，优化 Agent 工具调用判断逻辑
-2. 新增可视化模块，导出光伏预测曲线图表
-3. 接入定时任务，实现自动日度光伏预测入库
-4. 封装 Docker 部署，支持 Linux 服务器一键运行
+### 命令行运行 Agent
+
+```powershell
+$python = "D:\AAA_myProjects\howso\myAgent\solar_agent\.venv\Scripts\python.exe"
+& $python Agent\run.py
+```
+
+## 数据库初始化顺序
+
+首次部署时，根据数据库类型执行对应脚本：
+
+1. `sql/init_schema.sql`
+2. `sql/cache_schema.sql`
+3. `sql/memory_schema.sql`
+4. `sql/migrations/001_phase1_memory_schema.sql`
+5. `sql/migrations/002_prediction_weather_data_mode.sql`
+
+生产环境建议使用迁移脚本管理数据库结构，不要直接删除业务表。
+
+## 测试与验证
+
+使用项目虚拟环境执行阶段性契约测试：
+
+```powershell
+$python = "D:\AAA_myProjects\howso\myAgent\solar_agent\.venv\Scripts\python.exe"
+& $python -m pytest -q tests\test_phase1_contract.py
+& $python -m compileall -q Agent app predModels tests
+```
+
+重点验证内容包括：
+
+- Token 认证和用户身份隔离。
+- Argon2id 密码哈希。
+- AskUser 实际传递用户问题并按会话恢复。
+- 日期解析和当前日期注入。
+- Agent 工具执行真实性。
+- 历史实况回测与未来预报缓存隔离。
+
+## 当前产品约定与限制
+
+- 当前前端仍以内置测试页面为主，后续计划使用 Vue 重建独立前端。
+- Token 接口已经为前后端分离预留，Vue 前端通过 `Authorization: Bearer <token>` 调用后端。
+- 数据导入暂时采用简单约定：用户在表格首行填写完整站点名称。复杂的站点匹配预览、未匹配禁止自动建站和二次确认暂缓实现。
+- 当前系统面向个人项目和小规模生产交付，暂未引入消息队列、分布式任务调度和完整可观测平台。
+- 阿里云模型接口偶发连接失败时，需要结合网络、TLS、代理和上游服务状态排查，不应仅通过增加 Agent 重试次数掩盖问题。
+
+## 后续产品化方向
+
+1. 使用 Vue 构建正式前端，完善登录、会话列表、流式消息和 AskUser 弹窗。
+2. 增加统一的 Agent 执行状态、错误码和任务追踪。
+3. 增加预测结果可信度、模型版本和回测报告。
+4. 完善数据导入预览、站点匹配和重复数据处理。
+5. 增加日志、指标、链路追踪和接口限流。
+6. 增加 Docker 部署、定时预测和后台任务能力。
+7. 建立工具调用评测集，持续评估日期解析、站点识别、预测准确率和任务完成率。
+
+## 学习文档
+
+- [项目架构与产品路线](docs/current_architecture_and_product_roadmap.md)
+- [Token 认证与 AskUser 学习指南](docs/phase1/token_and_ask_user_learning_guide.md)
+- [阶段一验收清单](docs/phase1/acceptance_checklist.md)
+- [阶段一学习笔记](docs/phase1/phase1_learning_notes.md)
 
 ## 仓库地址
-GitHub：https://github.com/yke6519-droid/SolarAgent
+
+GitHub：<https://github.com/yke6519-droid/SolarAgent>
