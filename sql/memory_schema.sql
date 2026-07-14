@@ -1,0 +1,24 @@
+-- SolarAgent 对话记忆表（生产安全版）
+-- 仅负责建表，不在应用启动时修改 MySQL 全局配置。
+
+CREATE TABLE IF NOT EXISTS message_store (
+    id          INT AUTO_INCREMENT PRIMARY KEY,
+    session_id  VARCHAR(255) NOT NULL,
+    user_id     BIGINT NULL,
+    message     TEXT NOT NULL,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_session_created (session_id, created_at),
+    INDEX idx_user_session_created (user_id, session_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS agent_summary_store (
+    session_id  VARCHAR(255) NOT NULL,
+    user_id     BIGINT NOT NULL,
+    summary     TEXT NOT NULL,
+    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (session_id, user_id),
+    INDEX idx_summary_user (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 旧环境升级请执行 sql/migrations/001_phase1_memory_schema.sql。
+-- 不在此处创建测试清理 Event，避免对话记录被自动删除。

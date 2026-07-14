@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="DataSourcePerFileMappings">
+    <file url="file://$PROJECT_DIR$/sql/migrations/002_prediction_weather_data_mode.sql" value="e58cef65-a296-4eb3-81c2-f6a72726d41a" />
+  </component>
+</project>

@@ -1,0 +1,422 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="9ef04e92-3315-4ef3-8f6a-131c31597f82" name="更改" comment="更新一阶段完成的Readme" />
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="Python Script" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;yke6519-droid&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;git@github.com:yke6519-droid/solarAgent.git&quot;,
+    &quot;accountId&quot;: &quot;49bf813a-f8b8-4e36-89eb-67256c5547ae&quot;
+  }
+}</component>
+  <component name="HighlightingSettingsPerFile">
+    <setting file="file://$PROJECT_DIR$/requirements.txt" root0="SKIP_INSPECTION" />
+  </component>
+  <component name="ProblemsViewState">
+    <option name="selectedTabId" value="CurrentFile" />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 5
+}</component>
+  <component name="ProjectId" id="3G72D6xNuMsx3hvNJxzoaj32gv9" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+    <option name="showScratchesAndConsoles" value="false" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "Notification.DisplayName-DoNotAsk-Python Stub Packages Advertiser": "推荐使用 Python 存根软件包",
+    "Notification.DoNotAsk-Python Stub Packages Advertiser": "true",
+    "Python.agent.executor": "Run",
+    "Python.autoPred_英杰_hourly_post_schedule.executor": "Run",
+    "Python.helloQwen.executor": "Run",
+    "Python.main.executor": "Run",
+    "Python.pv_predictor (1).executor": "Run",
+    "Python.pv_predictor.executor": "Run",
+    "Python.run (1).executor": "Run",
+    "Python.run.executor": "Run",
+    "Python.weather_fetcher.executor": "Run",
+    "Python.weather_fetcher_tool (1).executor": "Run",
+    "Python.weather_fetcher_tool.executor": "Run",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "git-widget-placeholder": "main",
+    "ignore.virus.scanning.warn.message": "true",
+    "last_opened_file_path": "D:/AAA_myProjects/howso/myAgent/solar_agent/temp/file",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "settings.editor.selected.configurable": "preferences.pluginManager",
+    "vue.rearranger.settings.migration": "true"
+  },
+  "keyToStringList": {
+    "ChangesTree.GroupingKeys": [
+      "repository"
+    ],
+    "DatabaseDriversLRU": [
+      "mysql"
+    ]
+  }
+}]]></component>
+  <component name="PyConsoleOptionsProvider">
+    <option name="myPythonConsoleState">
+      <console-settings module-name="solar_agent" sdk-home="$PROJECT_DIR$/.venv/Scripts/python.exe" working-directory="$PROJECT_DIR$">
+        <option name="sdk">
+          <Sdk />
+        </option>
+        <option name="mySdkHome" value="$PROJECT_DIR$/.venv/Scripts/python.exe" />
+        <option name="mySdk">
+          <Sdk />
+        </option>
+        <option name="myModuleName" value="solar_agent" />
+        <option name="myWorkingDirectory" value="$PROJECT_DIR$" />
+      </console-settings>
+    </option>
+  </component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="D:\AAA_myProjects\howso\myAgent\solar_agent\temp\file" />
+      <recent name="D:\AAA项目学习\华苏\myAgent\solar_agent\predModels" />
+    </key>
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="D:\AAA项目学习\华苏\myAgent\solar_agent\temp" />
+      <recent name="D:\AAA项目学习\华苏\myAgent\solar_agent\predModels\Tools" />
+    </key>
+  </component>
+  <component name="RunManager" selected="Python.main">
+    <configuration name="autoPred_英杰_hourly_post_schedule" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="solar_agent" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/predModels" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/predModels/autoPred_英杰_hourly_post_schedule.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="main" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="solar_agent" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/app" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/app/main.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="run (1)" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="solar_agent" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/Agent" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/Agent/run.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="run" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="solar_agent" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/agent" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/agent/run.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="weather_fetcher_tool" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="solar_agent" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/predModels/Tools" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/predModels/Tools/weather_fetcher_tool.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Python.main" />
+        <item itemvalue="Python.run" />
+        <item itemvalue="Python.weather_fetcher_tool" />
+        <item itemvalue="Python.autoPred_英杰_hourly_post_schedule" />
+        <item itemvalue="Python.run (1)" />
+      </list>
+    </recent_temporary>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-js-predefined-d6986cc7102b-b598e85cdad2-JavaScript-PY-252.25557.178" />
+        <option value="bundled-python-sdk-ce6832f46686-7b97d883f26b-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-252.25557.178" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="默认任务">
+      <changelist id="9ef04e92-3315-4ef3-8f6a-131c31597f82" name="更改" comment="" />
+      <created>1783308165614</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1783308165614</updated>
+      <workItem from="1783308167158" duration="6474000" />
+      <workItem from="1783320362284" duration="9469000" />
+      <workItem from="1783331447935" duration="130000" />
+      <workItem from="1783331592668" duration="3767000" />
+      <workItem from="1783388552564" duration="2045000" />
+      <workItem from="1783390634691" duration="984000" />
+      <workItem from="1783391634617" duration="118000" />
+      <workItem from="1783391756423" duration="914000" />
+      <workItem from="1783392810993" duration="483000" />
+      <workItem from="1783393690476" duration="88000" />
+      <workItem from="1783393965061" duration="1851000" />
+      <workItem from="1783395860386" duration="186000" />
+      <workItem from="1783396054297" duration="17507000" />
+      <workItem from="1783471501203" duration="20562000" />
+      <workItem from="1783496544762" duration="28318000" />
+      <workItem from="1783646575726" duration="22136000" />
+      <workItem from="1783905824195" duration="23831000" />
+      <workItem from="1783997580080" duration="19950000" />
+    </task>
+    <task id="LOCAL-00001" summary="项目初始化：&#10;1. 完成环境依赖的搭建requirements&#10;2. 旧项目解耦为LLM可调用的工具&#10;3. SQL库表设计">
+      <option name="closed" value="true" />
+      <created>1783325207842</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1783325207842</updated>
+    </task>
+    <task id="LOCAL-00002" summary="完成数据库连接，实现站点数据的从库中查询">
+      <option name="closed" value="true" />
+      <created>1783330967441</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1783330967441</updated>
+    </task>
+    <task id="LOCAL-00003" summary="1、完成Agent框架搭建&#10;2、完成文件查询工具调用&#10;3、优化-预测光伏发电后、气象数据查询后，将数据存储到结果中&#10;4、优化-预测光伏发电不固定在当天，用户可以灵活进行预测与查询">
+      <option name="closed" value="true" />
+      <created>1783416550109</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1783416550109</updated>
+    </task>
+    <task id="LOCAL-00004" summary="完成多轮对话记忆功能&#10;1. 能够在单次进程中实现多轮对话&#10;2. 实现对话记忆的MySQL持久化。并为后续持久化分级留口&#10;3. 能够根据不同的SessionID读取/写入记忆入库&#10;4. 实现了记忆窗口化，并且能够就窗口外的记忆进行摘要总结&#10;5. 创建了两个数据库表：用户全量记忆 与 摘要记忆库">
+      <option name="closed" value="true" />
+      <created>1783495242249</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1783495242249</updated>
+    </task>
+    <task id="LOCAL-00005" summary="完成多轮对话记忆功能&#10;1. 能够在单次进程中实现多轮对话&#10;2. 实现对话记忆的MySQL持久化。并为后续持久化分级留口&#10;3. 能够根据不同的SessionID读取/写入记忆入库&#10;4. 实现了记忆窗口化，并且能够就窗口外的记忆进行摘要总结&#10;5. 创建了两个数据库表：用户全量记忆 与 摘要记忆库">
+      <option name="closed" value="true" />
+      <created>1783495906681</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1783495906681</updated>
+    </task>
+    <task id="LOCAL-00006" summary="完成多文件写入\读取功能">
+      <option name="closed" value="true" />
+      <created>1783501924550</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1783501924550</updated>
+    </task>
+    <task id="LOCAL-00007" summary="1、完成表格读写工具开发&#10;2、完成云端知识库接入，本地Agent检索功能&#10;3、新增自然语言日期解析工具&#10;4、解决预测结果被分段删除的问题">
+      <option name="closed" value="true" />
+      <created>1783656075515</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1783656075515</updated>
+    </task>
+    <task id="LOCAL-00008" summary="根据Manus的askHumanTool的思想，设计了ask_user_tool，并优化了站点适配，能够返回多个站点供用户选择">
+      <option name="closed" value="true" />
+      <created>1783665107412</created>
+      <option name="number" value="00008" />
+      <option name="presentableId" value="LOCAL-00008" />
+      <option name="project" value="LOCAL" />
+      <updated>1783665107412</updated>
+    </task>
+    <task id="LOCAL-00009" summary="做了SystemPrompt的精简，去除了重复的内容。">
+      <option name="closed" value="true" />
+      <created>1783669131000</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1783669131000</updated>
+    </task>
+    <task id="LOCAL-00010" summary="agent部分:&#10;1. 完成数据可视化&#10;2. 完成数据导入工具&#10;FastAPI部分：&#10;1. 完成对话接口的初步搭建&#10;2. 实现简单的html页面用户对话测试">
+      <option name="closed" value="true" />
+      <created>1783924951370</created>
+      <option name="number" value="00010" />
+      <option name="presentableId" value="LOCAL-00010" />
+      <option name="project" value="LOCAL" />
+      <updated>1783924951370</updated>
+    </task>
+    <task id="LOCAL-00011" summary="实现了简单的前后端联调&#10;主要测试了userService的相关功能实现：&#10;1. 用户表设计&#10;2. 登录、注册、个人会话记录的增、删、查&#10;3. 会话安全性的校验，会话的非持有者不能对他人会话进行操作。">
+      <option name="closed" value="true" />
+      <created>1783935288111</created>
+      <option name="number" value="00011" />
+      <option name="presentableId" value="LOCAL-00011" />
+      <option name="project" value="LOCAL" />
+      <updated>1783935288111</updated>
+    </task>
+    <task id="LOCAL-00012" summary="对系统进行多处优化，目前已经能够实现一个基础但完整的智能体项目了&#10;1. 对用户登录做了JWT令牌校验身份&#10;2. 对ask_user前端做了优化，现在用户能够看到智能体返回的问题了&#10;3. 完成了系统架构的优化工作，从产品角度对项目架构和最小核心闭环进行分析&#10;4.">
+      <option name="closed" value="true" />
+      <created>1784019171171</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1784019171171</updated>
+    </task>
+    <task id="LOCAL-00013" summary="完成了第一阶段的安全修复，目前已经能够实现一个基础但完整的智能体项目了&#10;1. 对用户登录做了JWT令牌校验身份，移除了之前前端直传user_id的方式。&#10;2. 对ask_user前端做了优化，现在用户能够看到智能体返回的问题了。&#10;3. 完成了系统架构的优化工作，从产品角度对项目架构和最小核心闭环进行分析&#10;4. 修复了智能体对日期年份的幻觉：每次初始化Agent时，将当前时间插入到SystemPrompt中&#10;5. 分析数据导入站点的bug，但是暂定规范：导入表格首行填写完整站点名称，复杂校验后续实现。&#10;6. 增加历史实况回测模式及预测版本标识，区分历史气象与未来预报缓存。">
+      <option name="closed" value="true" />
+      <created>1784019404967</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1784019404967</updated>
+    </task>
+    <task id="LOCAL-00014" summary="更新一阶段完成的Readme">
+      <option name="closed" value="true" />
+      <created>1784019968667</created>
+      <option name="number" value="00014" />
+      <option name="presentableId" value="LOCAL-00014" />
+      <option name="project" value="LOCAL" />
+      <updated>1784019968667</updated>
+    </task>
+    <option name="localTasksCounter" value="15" />
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="项目初始化：&#10;1. 完成环境依赖的搭建requirements&#10;2. 旧项目解耦为LLM可调用的工具&#10;3. SQL库表设计" />
+    <MESSAGE value="完成数据库连接，实现站点数据的从库中查询" />
+    <MESSAGE value="1、完成Agent框架搭建&#10;2、完成文件查询工具调用&#10;3、优化-预测光伏发电后、气象数据查询后，将数据存储到结果中&#10;4、优化-预测光伏发电不固定在当天，用户可以灵活进行预测与查询" />
+    <MESSAGE value="完成多轮对话记忆功能&#10;1. 能够在单次进程中实现多轮对话&#10;2. 实现对话记忆的MySQL持久化。并为后续持久化分级留口&#10;3. 能够根据不同的SessionID读取/写入记忆入库&#10;4. 实现了记忆窗口化，并且能够就窗口外的记忆进行摘要总结&#10;5. 创建了两个数据库表：用户全量记忆 与 摘要记忆库" />
+    <MESSAGE value="完成多文件写入\读取功能" />
+    <MESSAGE value="1、完成表格读写工具开发&#10;2、完成云端知识库接入，本地Agent检索功能&#10;3、新增自然语言日期解析工具&#10;4、解决预测结果被分段删除的问题" />
+    <MESSAGE value="根据Manus的askHumanTool的思想，设计了ask_user_tool，并优化了站点适配，能够返回多个站点供用户选择" />
+    <MESSAGE value="做了SystemPrompt的精简，去除了重复的内容。" />
+    <MESSAGE value="agent部分:&#10;1. 完成数据可视化&#10;2. 完成数据导入工具&#10;FastAPI部分：&#10;1. 完成对话接口的初步搭建&#10;2. 实现简单的html页面用户对话测试" />
+    <MESSAGE value="实现了简单的前后端联调&#10;主要测试了userService的相关功能实现：&#10;1. 用户表设计&#10;2. 登录、注册、个人会话记录的增、删、查&#10;3. 会话安全性的校验，会话的非持有者不能对他人会话进行操作。" />
+    <MESSAGE value="对系统进行多处优化，目前已经能够实现一个基础但完整的智能体项目了&#10;1. 对用户登录做了JWT令牌校验身份&#10;2. 对ask_user前端做了优化，现在用户能够看到智能体返回的问题了&#10;3. 完成了系统架构的优化工作，从产品角度对项目架构和最小核心闭环进行分析&#10;4." />
+    <MESSAGE value="完成了第一阶段的安全修复，目前已经能够实现一个基础但完整的智能体项目了&#10;1. 对用户登录做了JWT令牌校验身份，移除了之前前端直传user_id的方式。&#10;2. 对ask_user前端做了优化，现在用户能够看到智能体返回的问题了。&#10;3. 完成了系统架构的优化工作，从产品角度对项目架构和最小核心闭环进行分析&#10;4. 修复了智能体对日期年份的幻觉：每次初始化Agent时，将当前时间插入到SystemPrompt中&#10;5. 分析数据导入站点的bug，但是暂定规范：导入表格首行填写完整站点名称，复杂校验后续实现。&#10;6. 增加历史实况回测模式及预测版本标识，区分历史气象与未来预报缓存。" />
+    <MESSAGE value="更新一阶段完成的Readme" />
+    <option name="LAST_COMMIT_MESSAGE" value="更新一阶段完成的Readme" />
+  </component>
+  <component name="com.intellij.coverage.CoverageDataManagerImpl">
+    <SUITE FILE_PATH="coverage/solar_agent$agent.coverage" NAME="agent 覆盖结果" MODIFIED="1783396170694" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/agent" />
+    <SUITE FILE_PATH="coverage/solar_agent$autoPred__hourly_post_schedule.coverage" NAME="autoPred_英杰_hourly_post_schedule 覆盖结果" MODIFIED="1783412112651" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/predModels" />
+    <SUITE FILE_PATH="coverage/solar_agent$main.coverage" NAME="main 覆盖结果" MODIFIED="1784017614557" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/app" />
+    <SUITE FILE_PATH="coverage/solar_agent$weather_fetcher_tool__1_.coverage" NAME="weather_fetcher_tool (1) 覆盖结果" MODIFIED="1783331255758" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/predModels/Tools" />
+    <SUITE FILE_PATH="coverage/solar_agent$pv_predictor__1_.coverage" NAME="pv_predictor (1) 覆盖结果" MODIFIED="1783395212707" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/predModels/Tools" />
+    <SUITE FILE_PATH="coverage/solar_agent$weather_fetcher_tool.coverage" NAME="weather_fetcher_tool 覆盖结果" MODIFIED="1783654780403" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/predModels/Tools" />
+    <SUITE FILE_PATH="coverage/solar_agent$run__1_.coverage" NAME="run (1) 覆盖结果" MODIFIED="1783411982613" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/Agent" />
+    <SUITE FILE_PATH="coverage/solar_agent$weather_fetcher.coverage" NAME="weather_fetcher 覆盖结果" MODIFIED="1783319002716" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/predModels" />
+    <SUITE FILE_PATH="coverage/solar_agent$pv_predictor.coverage" NAME="pv_predictor 覆盖结果" MODIFIED="1783323949007" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/predModels" />
+    <SUITE FILE_PATH="coverage/solar_agent$helloQwen.coverage" NAME="helloQwen 覆盖结果" MODIFIED="1783387684421" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/temp" />
+    <SUITE FILE_PATH="coverage/solar_agent$run.coverage" NAME="run 覆盖结果" MODIFIED="1783909769740" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/agent" />
+  </component>
+</project>
