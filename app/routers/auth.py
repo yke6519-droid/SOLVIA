@@ -10,7 +10,8 @@ auth.py - 认证路由
 import logging
 from fastapi import APIRouter, HTTPException
 
-from app.schemas.user import RegisterRequest, LoginRequest, UserResponse
+from app.schemas.user import RegisterRequest, LoginRequest, UserResponse, AuthResponse
+from app.services.auth_service import create_access_token
 from app.services.user_service import register_user, login_user
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -33,17 +34,24 @@ async def register(req: RegisterRequest):
         raise HTTPException(400, detail=str(e))
 
 
-@router.post("/login", response_model=UserResponse)
+@router.post("/login", response_model=AuthResponse)
 async def login(req: LoginRequest):
     """用户登录。"""
     try:
+        # 用户进行登录
         user = login_user(req.username, req.password)
-        return UserResponse(
-            user_id=user["user_id"],
-            username=user["username"],
-            role=user["role"],
-            display_name=user["display_name"],
-            message="登录成功",
+        # 登录成功后，通过 create_access_token 发放JWT令牌
+        token, expires_in = create_access_token(user)
+        return AuthResponse(
+            access_token=token,
+            expires_in=expires_in,
+            user=UserResponse(
+                user_id=user["user_id"],
+                username=user["username"],
+                role=user["role"],
+                display_name=user["display_name"],
+                message="登录成功",
+            ),
         )
     except ValueError as e:
         raise HTTPException(401, detail=str(e))

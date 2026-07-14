@@ -18,6 +18,7 @@ cache_manager.py - 缓存管理模块
   - weather_fetcher_tool._fetch_from_forecast (未来气象缓存)
 """
 import pandas as pd
+from datetime import date, datetime
 from typing import Optional
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
@@ -43,12 +44,29 @@ DB_WEATHER_FIELDS = [
     "wind_u_component", "wind_v_component",
 ]
 
+PREDICTION_MODE_HISTORICAL = "historical_actual"
+PREDICTION_MODE_FORECAST = "forecast"
+
+
+def get_prediction_data_mode(predict_date: str) -> str:
+    """根据目标日期决定预测使用历史实况还是未来预报。"""
+    target = date.fromisoformat(predict_date)
+    return (
+        PREDICTION_MODE_HISTORICAL
+        if target < datetime.now().date()
+        else PREDICTION_MODE_FORECAST
+    )
+
 
 # ============================================================
 # 预测发电量缓存
 # ============================================================
 
-def read_prediction_cache(station_id: str, predict_date: str) -> Optional[pd.DataFrame]:
+def read_prediction_cache(
+    station_id: str,
+    predict_date: str,
+    weather_data_mode: Optional[str] = None,
+) -> Optional[pd.DataFrame]:
     """
     查询预测缓存。
 
@@ -62,15 +80,16 @@ def read_prediction_cache(station_id: str, predict_date: str) -> Optional[pd.Dat
     """
     engine = create_engine(MYSQL_URL)
     query = text("""
-        SELECT record_time, power_kwh, weather_type
+        SELECT record_time, power_kwh, weather_type, weather_data_mode
         FROM prediction_cache
         WHERE station_id = :sid
           AND predict_date = :dt
           AND status = 1
+          AND (:mode IS NULL OR weather_data_mode = :mode)
         ORDER BY record_time
     """)
     with engine.connect() as conn:
-        df = pd.read_sql(query, conn, params={"sid": station_id, "dt": predict_date})
+        df = pd.read_sql(query, conn, params={"sid": station_id, "dt": predict_date, "mode": weather_data_mode})
     if len(df) == 0:
         return None
     df.rename(columns={"record_time": "time", "power_kwh": "fusion"}, inplace=True)
@@ -79,7 +98,8 @@ def read_prediction_cache(station_id: str, predict_date: str) -> Optional[pd.Dat
 
 
 def write_prediction_cache(station_id: str, predict_date: str,
-                           pred_df: pd.DataFrame, weather_type: str) -> None:
+                           pred_df: pd.DataFrame, weather_type: str,
+                           weather_data_mode: str = PREDICTION_MODE_FORECAST) -> None:
     """
     写入预测缓存。幂等(INSERT IGNORE)。
 
@@ -98,14 +118,17 @@ def write_prediction_cache(station_id: str, predict_date: str,
             "power_kwh": float(row["fusion"]),
             "weather_type": weather_type,
             "predict_date": predict_date,
+            "weather_data_mode": weather_data_mode,
         })
     with engine.begin() as conn:
         for r in rows:
             conn.execute(text("""
                 INSERT IGNORE INTO prediction_cache
-                    (station_id, record_time, power_kwh, weather_type, predict_date, status)
+                    (station_id, record_time, power_kwh, weather_type, predict_date,
+                     weather_data_mode, status)
                 VALUES
-                    (:station_id, :record_time, :power_kwh, :weather_type, :predict_date, 1)
+                    (:station_id, :record_time, :power_kwh, :weather_type, :predict_date,
+                     :weather_data_mode, 1)
             """), r)
     print(f"💾 预测结果已缓存: {station_id} / {predict_date} ({len(rows)} 条)")
 
@@ -127,8 +150,9 @@ def clean_prediction_cache() -> int:
             UPDATE prediction_cache
             SET status = 0
             WHERE status = 1
+              AND weather_data_mode = :forecast_mode
               AND predicted_at < DATE_SUB(NOW(), INTERVAL 3 HOUR)
-        """))
+        """), {"forecast_mode": PREDICTION_MODE_FORECAST})
     return result.rowcount
 
 

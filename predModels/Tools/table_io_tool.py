@@ -302,6 +302,7 @@ def _fetch_data(
     """
     from predModels.Tools.cache_manager import (
         read_prediction_cache, read_archive_cache, read_forecast_cache,
+        get_prediction_data_mode,
     )
     from predModels.Tools.power_query_tool import _query_actual_power, _query_actual_power_range
 
@@ -331,7 +332,9 @@ def _fetch_data(
 
     elif data_type == "predicted":
         # 预测发电量:先查缓存,未命中则调底层预测函数
-        df = read_prediction_cache(station_id, predict_date)
+        df = read_prediction_cache(
+            station_id, predict_date, get_prediction_data_mode(predict_date)
+        )
         if df is None:
             from predModels.Tools.pv_predictor import predict_station_power
             lat = info["lat"]
@@ -354,7 +357,9 @@ def _fetch_data(
     elif data_type == "comparison":
         # 预测 vs 实际对比:两份数据 JOIN
         # 查预测(同 predicted 流程)
-        pred_df = read_prediction_cache(station_id, predict_date)
+        pred_df = read_prediction_cache(
+            station_id, predict_date, get_prediction_data_mode(predict_date)
+        )
         if pred_df is None:
             from predModels.Tools.pv_predictor import predict_station_power
             lat = info["lat"]

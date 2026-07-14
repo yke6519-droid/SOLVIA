@@ -52,5 +52,5 @@ def ask_user(
         用户的回复内容,带"用户回复:"前缀,便于 LLM 识别
     """
     print(f"\n🤔 {question}")
-    answer = _input_handler("👉 请回复: ")
+    answer = _input_handler(question)
     return f"用户回复: {answer}"

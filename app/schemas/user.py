@@ -28,4 +28,12 @@ class UserResponse(BaseModel):
     username: str = Field(..., description="用户名")
     role: str = Field(..., description="角色: super_admin/admin/user")
     display_name: Optional[str] = Field(None, description="显示名称")
-    message: str = Field("操作成功", description="提示消息")
+message: str = Field("操作成功", description="提示消息")
+
+
+class AuthResponse(BaseModel):
+    """登录响应，兼容 Vue/Axios/fetch 等前端。"""
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: UserResponse

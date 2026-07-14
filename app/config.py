@@ -27,5 +27,8 @@ class Settings(BaseSettings):
     # ask_user 超时（秒）
     ask_user_timeout: int = 120
 
+    jwt_secret_key: str = ""
+    jwt_access_token_expire_seconds: int = 3600
+
 
 settings = Settings()

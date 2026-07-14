@@ -6,6 +6,7 @@ agent.py - AgentExecutor 组装
 
 from Agent.llm import build_llm
 from Agent.tools import get_all_tools
+from predModels.Tools.weather_fetcher_tool import get_current_datetime
 from Agent.prompt import build_prompt
 from Agent.memory import build_memory
 from langchain.agents import create_tool_calling_agent, AgentExecutor
@@ -32,7 +33,9 @@ def build_agent(
     """
     llm = build_llm()
     tools = get_all_tools()
-    prompt = build_prompt()
+    # Agent 创建时固定注入一次服务端当前日期，避免模型自行猜测年份。
+    current_datetime = get_current_datetime.invoke({})
+    prompt = build_prompt(current_datetime=current_datetime)
 
     # 如果外部未传入 memory,内部创建
     if memory is None:
@@ -51,3 +54,5 @@ def build_agent(
     )
 
     return agent_executor
+
+

@@ -166,13 +166,9 @@ class PersistentWindowSummaryMemory(BaseChatMemory, SummarizerMixin):
             logger.warning(f"摘要生成失败(不影响对话): {e}")
 
     async def amaybe_summarize(self):
-        """
-        异步摘要: 供 FastAPI asyncio.create_task 使用。
-
-        当前内部用同步实现 (LLM 调用本身是同步的),
-        未来可改为 async LLM 调用。
-        """
-        self.maybe_summarize()
+        """在线程中执行同步摘要，避免阻塞 asyncio 事件循环。"""
+        import asyncio
+        await asyncio.to_thread(self.maybe_summarize)
 
     # ============================================================
     # 摘要持久化
@@ -191,8 +187,8 @@ class PersistentWindowSummaryMemory(BaseChatMemory, SummarizerMixin):
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT summary FROM agent_summary_store WHERE session_id=%s",
-                    (self.session_id,)
+                    "SELECT summary FROM agent_summary_store WHERE session_id=%s AND user_id=%s",
+                    (self.session_id, self.user_id)
                 )
                 row = cur.fetchone()
                 return row[0] if row else ""

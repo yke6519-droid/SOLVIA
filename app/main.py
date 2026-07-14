@@ -30,6 +30,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 清除所有大小写代理环境变量
+proxy_env_keys = [
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+    "http_proxy", "https_proxy", "all_proxy"
+]
+for key in proxy_env_keys:
+    os.environ.pop(key, None)
+
+# 配置NO_PROXY，强制阿里云域名、本地不走代理，兜底防护
+os.environ["NO_PROXY"] = "dashscope.aliyuncs.com,bailian.cn-beijing.aliyuncs.com,127.0.0.1,localhost"
+os.environ["no_proxy"] = "dashscope.aliyuncs.com,bailian.cn-beijing.aliyuncs.com,127.0.0.1,localhost"
 
 def create_app() -> FastAPI:
     """创建 FastAPI 应用实例。"""
@@ -221,6 +232,7 @@ TEST_HTML = """<!DOCTYPE html>
 </div>
 
 <script>
+let accessToken = "";
 let userId = null;
 let username = '';
 let displayName = '';
@@ -245,10 +257,11 @@ async function doLogin() {
     });
     const data = await res.json();
     if (!res.ok) { throw new Error(data.detail || '登录失败'); }
-    userId = data.user_id;
-    username = data.username;
-    displayName = data.display_name || data.username;
-    role = data.role;
+    accessToken = data.access_token;
+    userId = data.user.user_id;
+    username = data.user.username;
+    displayName = data.user.display_name || data.user.username;
+    role = data.user.role;
     showMainPage();
   } catch (e) {
     errEl.textContent = e.message;
@@ -266,17 +279,24 @@ function showMainPage() {
 }
 
 function doLogout() {
-  userId = null; sessionId = null;
+  accessToken = ""; userId = null; sessionId = null;
   document.getElementById('main-page').style.display = 'none';
   document.getElementById('login-page').style.display = 'flex';
   document.getElementById('session-list').innerHTML = '';
   document.getElementById('messages').innerHTML = '';
 }
 
+function apiFetch(url, options = {}) {
+  options.headers = Object.assign({'Content-Type': 'application/json', 'Authorization': 'Bearer ' + accessToken}, options.headers || {});
+  return fetch(url, options).then(res => {
+    if (res.status === 401) { doLogout(); throw new Error('登录已过期'); }
+    return res;
+  });
+}
 // === Sessions ===
 async function loadSessions() {
   try {
-    const res = await fetch('/api/sessions?user_id=' + userId);
+    const res = await apiFetch('/api/sessions');
     const data = await res.json();
     const list = document.getElementById('session-list');
     list.innerHTML = '';
@@ -299,7 +319,7 @@ async function loadSessions() {
 
 async function createSession() {
   try {
-    const res = await fetch('/api/sessions?user_id=' + userId, { method: 'POST' });
+    const res = await apiFetch('/api/sessions', { method: 'POST' });
     const data = await res.json();
     sessionId = data.session_id;
     document.getElementById('chat-title').textContent = '会话: ' + sessionId;
@@ -329,7 +349,7 @@ async function switchSession(sid) {
   document.getElementById('messages').innerHTML = '';
   addMessage('assistant', '正在加载历史消息...');
   try {
-    const res = await fetch('/api/sessions/' + sid + '/messages?user_id=' + userId);
+    const res = await apiFetch('/api/sessions/' + sid + '/messages');
     const data = await res.json();
     document.getElementById('messages').innerHTML = '';
     if (data.messages.length === 0) {
@@ -347,7 +367,7 @@ async function deleteSession(e, sid) {
   e.stopPropagation();
   if (!confirm('确定删除此会话？')) return;
   try {
-    await fetch('/api/sessions/' + sid + '?user_id=' + userId, { method: 'DELETE' });
+    await apiFetch('/api/sessions/' + sid, { method: 'DELETE' });
     if (sessionId === sid) {
       sessionId = null;
       document.getElementById('chat-title').textContent = '选择或新建一个会话';
@@ -408,10 +428,10 @@ async function sendMessage() {
   addMessage('user', msg);
   const assistantEl = addMessage('assistant', '');
   try {
-    const response = await fetch('/api/chat/stream', {
+    const response = await apiFetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId, message: msg, user_id: userId })
+      body: JSON.stringify({ session_id: sessionId, message: msg })
     });
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -482,7 +502,7 @@ async function replyAskUser() {
   document.getElementById('ask-modal').style.display = 'none';
   addToolEvent('用户回复: ' + answer);
   try {
-    await fetch('/api/chat/' + sessionId + '/reply?user_id=' + userId, {
+    await apiFetch('/api/chat/' + sessionId + '/reply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ answer: answer })

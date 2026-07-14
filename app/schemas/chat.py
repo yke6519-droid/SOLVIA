@@ -11,7 +11,7 @@ class ChatRequest(BaseModel):
     """对话请求"""
     session_id: str = Field(..., description="会话ID")
     message: str = Field(..., description="用户消息")
-    user_id: int = Field(..., description="用户ID，必传，校验会话所有权")
+
 
 
 class ReplyRequest(BaseModel):

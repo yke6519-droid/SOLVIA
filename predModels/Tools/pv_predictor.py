@@ -1,4 +1,4 @@
-﻿"""
+"""
 pv_predictor.py - 光伏发电预测模块 (LangChain Tool)
 =====================================================
 基于历史气象 + 未来气象数据，使用 Stacking 集成模型预测未来 24 小时光伏发电量。
@@ -842,7 +842,8 @@ def compare_with_actual(pred_df: pd.DataFrame, station_id: str, predict_date: st
 # ============================================================
 
 def format_prediction_summary(pred_df: pd.DataFrame, station_name: str,
-                              weather_type: str, comparison: str = "") -> str:
+                              weather_type: str, comparison: str = "",
+                              weather_data_mode: str = "forecast") -> str:
 
     # todo 后期可以把各模型的预测结果去除，目前来看有些冗余。只展示最终模型的结果即可
 
@@ -882,8 +883,10 @@ def format_prediction_summary(pred_df: pd.DataFrame, station_name: str,
     gen_start = int(generating_hours.min()) if len(generating_hours) > 0 else 0
     gen_end = int(generating_hours.max()) if len(generating_hours) > 0 else 0
 
+    mode_label = "历史实况回测" if weather_data_mode == "historical_actual" else "未来预报"
     lines = [
         f"✅ {station_name} 预测完成（{weather_type}）",
+        f"数据模式: {mode_label}",
         f"总发电量: {total_power:.1f} kWh",
         f"峰值时段: {peak_hour}:00，峰值: {peak_power:.1f} kWh",
         f"发电时段: {gen_start}:00~{gen_end}:00（{len(generating_hours)}小时）",
@@ -939,13 +942,17 @@ def predict_station_power(station_name: str, lat: float, lon: float,
         read_prediction_cache, write_prediction_cache,
         read_archive_cache, write_archive_cache,
         read_forecast_cache, write_forecast_cache,
-        clean_prediction_cache,
+        clean_prediction_cache, get_prediction_data_mode,
+        PREDICTION_MODE_HISTORICAL,
     )
 
     # 【缓存查询】先查预测缓存，命中则跳过整个预测流程
     # 惰性清理过期缓存(当天已结束的预测标记为失效)
+    prediction_mode = get_prediction_data_mode(predict_date)
     clean_prediction_cache()
-    cached_pred = read_prediction_cache(station_id, predict_date)
+    cached_pred = read_prediction_cache(
+        station_id, predict_date, weather_data_mode=prediction_mode
+    )
     if cached_pred is not None:
         print(f"\n⚡ 预测缓存命中，跳过气象拉取和模型预测")
         # 缓存里只有 fusion 列，补齐其他模型列(用 fusion 填充)保持 DataFrame 结构一致
@@ -958,42 +965,55 @@ def predict_station_power(station_name: str, lat: float, lon: float,
         # 仍然查一下实际值做对比(对比不入缓存，每次实时查)
         comparison = compare_with_actual(cached_pred, station_id, predict_date)
         weather_type = "缓存(未知)"
-        summary = format_prediction_summary(cached_pred, station_name, weather_type, comparison)
+        summary = format_prediction_summary(cached_pred, station_name, weather_type, comparison, prediction_mode)
         return summary, cached_pred, weather_type
 
     print(f"\n🚀 开始预测 {station_name} 站点 {predict_date} 发电量")
     print(f"   历史基准日: {history_date}")
     print(f"   经纬度: lat={lat}, lon={lon}")
 
-    # 【步骤1】拉取历史气象（history_date 24h）
-    # 先查历史气象缓存(永久保存，过去天气不变)，未命中再拉 API
-    print(f"\n📥 步骤1: 拉取历史气象 ({history_date})...")
-    history_openmeteo = read_archive_cache(station_id, history_date)
-    if history_openmeteo is not None:
-        print(f"   历史气象缓存命中，跳过 API 调用")
-    else:
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        if history_date > today_str:
-            # 历史基准日在今天或之后，archive API 还没有这天的数据，改用 forecast API
-            history_openmeteo = _fetch_from_forecast(lat, lon, history_date, history_date).head(24)
+    # 【步骤1】拉取历史基准气象（history_date 24h）
+    # 过去日期使用 archive；今天及未来日期使用 forecast。
+    today = datetime.now().date()
+    history_is_historical = datetime.strptime(history_date, "%Y-%m-%d").date() < today
+    history_label = "历史气象" if history_is_historical else "预报气象"
+    print(f"\n📥 步骤1: 拉取{history_label} ({history_date})...")
+    if history_is_historical:
+        history_openmeteo = read_archive_cache(station_id, history_date)
+        if history_openmeteo is not None:
+            print("   历史气象缓存命中，跳过 API 调用")
         else:
             history_openmeteo = _fetch_from_archive(lat, lon, history_date, history_date).head(24)
-        # 拉到的历史气象写入缓存(永久保存)
-        write_archive_cache(station_id, history_openmeteo)
+            write_archive_cache(station_id, history_openmeteo)
+    else:
+        history_openmeteo = read_forecast_cache(station_id, history_date)
+        if history_openmeteo is not None:
+            print("   预报气象缓存命中，跳过 API 调用")
+        else:
+            history_openmeteo = _fetch_from_forecast(lat, lon, history_date, history_date).head(24)
+            write_forecast_cache(station_id, history_openmeteo)
 
     if history_openmeteo is None or len(history_openmeteo) == 0:
         raise ToolException(f"历史气象拉取失败: {history_date}")
 
     # 【步骤2】拉取目标日气象（predict_date 24h）
-    # 先查未来气象缓存，未命中再拉 forecast API
-    print(f"\n📥 步骤2: 拉取未来气象 ({predict_date})...")
-    future_openmeteo = read_forecast_cache(station_id, predict_date)
-    if future_openmeteo is not None:
-        print(f"   未来气象缓存命中，跳过 API 调用")
+    # 历史目标日使用历史实况回测，今天及未来目标日使用预报。
+    target_label = "历史实况" if prediction_mode == PREDICTION_MODE_HISTORICAL else "未来预报"
+    print(f"\n📥 步骤2: 拉取{target_label}气象 ({predict_date})...")
+    if prediction_mode == PREDICTION_MODE_HISTORICAL:
+        future_openmeteo = read_archive_cache(station_id, predict_date)
+        if future_openmeteo is not None:
+            print("   目标日历史气象缓存命中，跳过 API 调用")
+        else:
+            future_openmeteo = _fetch_from_archive(lat, lon, predict_date, predict_date).head(24)
+            write_archive_cache(station_id, future_openmeteo)
     else:
-        future_openmeteo = _fetch_from_forecast(lat, lon, predict_date, predict_date).head(24)
-        # 拉到的未来气象写入缓存(短期有效，过期自动清理)
-        write_forecast_cache(station_id, future_openmeteo)
+        future_openmeteo = read_forecast_cache(station_id, predict_date)
+        if future_openmeteo is not None:
+            print("   目标日预报气象缓存命中，跳过 API 调用")
+        else:
+            future_openmeteo = _fetch_from_forecast(lat, lon, predict_date, predict_date).head(24)
+            write_forecast_cache(station_id, future_openmeteo)
 
     if future_openmeteo is None or len(future_openmeteo) == 0:
         raise ToolException(f"未来气象拉取失败: {predict_date}")
@@ -1016,12 +1036,15 @@ def predict_station_power(station_name: str, lat: float, lon: float,
 
     # 【步骤6】生成摘要
     print(f"\n📝 步骤6: 生成摘要...")
-    summary = format_prediction_summary(pred_df, station_name, weather_type, comparison)
+    summary = format_prediction_summary(pred_df, station_name, weather_type, comparison, prediction_mode)
 
     # 【步骤7】预测结果写入缓存(当天有效，当天结束后逻辑删除)
     print(f"\n💾 步骤7: 写入预测缓存...")
     try:
-        write_prediction_cache(station_id, predict_date, pred_df, weather_type)
+        write_prediction_cache(
+            station_id, predict_date, pred_df, weather_type,
+            weather_data_mode=prediction_mode,
+        )
     except Exception as e:
         print(f"   ⚠️ 预测缓存写入失败(不影响预测结果): {e}")
 

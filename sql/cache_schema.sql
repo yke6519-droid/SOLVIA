@@ -22,11 +22,12 @@ CREATE TABLE `prediction_cache`
     `power_kwh`     DECIMAL(10, 2) NOT NULL COMMENT '预测发电量(kWh)',
     `weather_type`  VARCHAR(16)    DEFAULT NULL COMMENT '天气类型(晴天/非晴天)',
     `predict_date`  DATE           NOT NULL COMMENT '预测的目标日期(冗余，方便按日查询)',
+    `weather_data_mode` VARCHAR(32) NOT NULL DEFAULT 'forecast' COMMENT '气象数据模式: historical_actual/forecast',
     `predicted_at`  DATETIME       DEFAULT CURRENT_TIMESTAMP COMMENT '预测执行时间',
     `status`        TINYINT        DEFAULT 1 COMMENT '状态: 1有效 0已失效(逻辑删除)',
     `created_at`    DATETIME       DEFAULT CURRENT_TIMESTAMP COMMENT '入库时间',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_station_time` (`station_id`, `record_time`),
+    UNIQUE KEY `uk_station_time_mode` (`station_id`, `record_time`, `weather_data_mode`),
     KEY `idx_station_date` (`station_id`, `predict_date`),
     KEY `idx_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='预测发电量缓存表';

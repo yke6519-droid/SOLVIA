@@ -31,6 +31,8 @@ from dotenv import load_dotenv
 import os
 load_dotenv()
 
+from predModels.Tools.cache_manager import get_prediction_data_mode
+
 # MySQL 连接配置(与其他模块一致)
 MYSQL_URL = os.environ.get("MYSQL_URL")
 
@@ -320,7 +322,9 @@ def get_predicted_power(
     predict_date = parse_flexible_date(target_date)
     station_id, info = _resolve_station_id(station_name)
 
-    df = read_prediction_cache(station_id, predict_date)
+    df = read_prediction_cache(
+        station_id, predict_date, get_prediction_data_mode(predict_date)
+    )
     if df is None:
         return (
             f"⏳ {info['name']} 在 {predict_date} 暂无预测缓存记录。\n"
@@ -410,7 +414,9 @@ def get_power_comparison(
     station_id, info = _resolve_station_id(station_name)
 
     # 查预测缓存
-    pred_df = read_prediction_cache(station_id, predict_date)
+    pred_df = read_prediction_cache(
+        station_id, predict_date, get_prediction_data_mode(predict_date)
+    )
     if pred_df is None:
         return (
             f"⏳ {info['name']} 在 {predict_date} 暂无预测记录。\n"
