@@ -200,3 +200,186 @@ def get_power_chart_data(
     chart_data = _build_chart_data(df, data_type, info, predict_date)
 
     return json.dumps(chart_data, ensure_ascii=False, indent=2)
+
+# ============================================================
+# Range chart support
+# ============================================================
+
+def _load_range_power_frames(station_id: str, start_date: str, end_date: str, data_type: str):
+    """Load actual/predicted hourly frames for a date range."""
+    import pandas as pd
+    from backend.tools.cache_manager import get_prediction_data_mode, read_prediction_cache
+    from backend.tools.power_query_tool import _query_actual_power_range
+
+    frames = {}
+    if data_type in {"actual", "comparison"}:
+        actual = _query_actual_power_range(station_id, start_date, end_date)
+        if len(actual):
+            actual = actual.rename(columns={"record_time": "timestamp", "power_kwh": "value"})
+            actual["timestamp"] = pd.to_datetime(actual["timestamp"])
+            actual["value"] = pd.to_numeric(actual["value"], errors="coerce").fillna(0.0)
+            frames["actual"] = actual[["timestamp", "value"]].sort_values("timestamp")
+
+    if data_type in {"predicted", "comparison"}:
+        predicted_parts = []
+        for day in pd.date_range(start_date, end_date, freq="D"):
+            day_string = day.strftime("%Y-%m-%d")
+            predicted = read_prediction_cache(
+                station_id,
+                day_string,
+                get_prediction_data_mode(day_string),
+            )
+            if predicted is None or len(predicted) == 0:
+                continue
+            predicted = predicted.rename(columns={"time": "timestamp", "fusion": "value"})
+            predicted["timestamp"] = pd.to_datetime(predicted["timestamp"])
+            predicted["value"] = pd.to_numeric(predicted["value"], errors="coerce").fillna(0.0)
+            predicted_parts.append(predicted[["timestamp", "value"]])
+        if predicted_parts:
+            frames["predicted"] = pd.concat(predicted_parts, ignore_index=True).sort_values("timestamp")
+
+    return frames
+
+
+def _aggregate_range_frame(frame, granularity: str):
+    import pandas as pd
+
+    if frame is None or len(frame) == 0:
+        return {}
+    work = frame.copy()
+    if granularity == "daily":
+        work["label"] = work["timestamp"].dt.strftime("%Y-%m-%d")
+    else:
+        work["label"] = work["timestamp"].dt.strftime("%Y-%m-%d %H:%M")
+    grouped = work.groupby("label", sort=True)["value"].sum()
+    return {str(label): _safe_round(value) for label, value in grouped.items()}
+
+
+def _range_series_stats(values, labels, prefix):
+    if not values:
+        return {}
+    peak_index = max(range(len(values)), key=lambda index: values[index])
+    return {
+        f"{prefix}_total_kwh": _safe_round(sum(values)),
+        f"{prefix}_peak_time": labels[peak_index],
+        f"{prefix}_peak_value_kwh": _safe_round(values[peak_index]),
+        f"{prefix}_generation_hours": sum(1 for value in values if value > 0),
+    }
+
+
+def _build_range_chart_data(frames, station_info, start_date, end_date, data_type, granularity):
+    import pandas as pd
+
+    series_order = [name for name in ("predicted", "actual") if name in frames]
+    if not series_order:
+        raise ToolException(
+            f"{station_info['name']} {start_date} 至 {end_date} 没有可用的发电量数据"
+        )
+
+    label_maps = {name: _aggregate_range_frame(frames[name], granularity) for name in series_order}
+    labels = sorted({label for values in label_maps.values() for label in values})
+    if not labels:
+        raise ToolException(
+            f"{station_info['name']} {start_date} 至 {end_date} 没有可用的发电量数据"
+        )
+
+    colors = {
+        "actual": "#E67E22",
+        "predicted": "#2E86C1",
+    }
+    names = {
+        "actual": "实际发电量(kWh)",
+        "predicted": "预测发电量(kWh)",
+    }
+    series = []
+    metadata = {
+        "station": station_info.get("name", ""),
+        "station_full_name": station_info.get("name", ""),
+        "start_date": start_date,
+        "end_date": end_date,
+        "range_start": start_date,
+        "range_end": end_date,
+        "date": start_date if start_date == end_date else None,
+        "data_type": data_type,
+        "granularity": granularity,
+        "point_count": len(labels),
+        "day_count": (pd.to_datetime(end_date) - pd.to_datetime(start_date)).days + 1,
+    }
+
+    daily_totals = {}
+    for name in series_order:
+        values = [label_maps[name].get(label, 0.0) for label in labels]
+        series.append({"name": names[name], "color": colors[name], "data": values})
+        metadata.update(_range_series_stats(values, labels, name))
+        if granularity == "daily":
+            for label, value in label_maps[name].items():
+                daily_totals.setdefault(label, {})[f"{name}_total_kwh"] = value
+
+    if daily_totals:
+        metadata["daily_totals"] = [
+            {"date": label, **daily_totals[label]}
+            for label in sorted(daily_totals)
+        ]
+
+    title_type = {
+        "actual": "实际发电量",
+        "predicted": "预测发电量",
+        "comparison": "预测与实际发电量对比",
+    }[data_type]
+    granularity_label = "逐小时" if granularity == "hourly" else "按日汇总"
+
+    return {
+        "chart_type": "line",
+        "title": f"{station_info.get('name', '')}{start_date} 至 {end_date}{granularity_label}{title_type}",
+        "x_axis": {
+            "label": "时间" if granularity == "hourly" else "日期",
+            "data": labels,
+        },
+        "y_axis": {"label": "发电量(kWh)"},
+        "series": series,
+        "metadata": metadata,
+    }
+
+
+@tool
+def get_power_chart_data_by_range(
+    station_name: Annotated[str, "站点名称，例如 '英杰'"],
+    start_date: Annotated[str, "开始日期，支持 YYYY-MM-DD、6月1日等格式"],
+    end_date: Annotated[str, "结束日期，支持 YYYY-MM-DD、6月3日等格式"],
+    data_type: Annotated[str, "数据类型：actual=实际，predicted=预测，comparison=预测与实际对比"] = "actual",
+    granularity: Annotated[str, "粒度：hourly=逐小时，daily=按日汇总，auto=1到5天逐小时、超过5天按日汇总"] = "auto",
+) -> str:
+    """返回日期范围内可直接供前端渲染的结构化图表 JSON。"""
+    import pandas as pd
+    from backend.tools.date_parser_tool import parse_flexible_date
+    from backend.tools.power_query_tool import _resolve_station_id
+
+    if data_type not in {"actual", "predicted", "comparison"}:
+        raise ToolException("data_type 只支持 actual、predicted、comparison")
+    if granularity not in {"hourly", "daily", "auto"}:
+        raise ToolException("granularity 只支持 hourly、daily、auto")
+
+    start = parse_flexible_date(start_date)
+    end = parse_flexible_date(end_date)
+    if pd.to_datetime(start) > pd.to_datetime(end):
+        start, end = end, start
+    day_count = (pd.to_datetime(end) - pd.to_datetime(start)).days + 1
+    resolved_granularity = granularity
+    if resolved_granularity == "auto":
+        resolved_granularity = "hourly" if day_count <= 5 else "daily"
+
+    station_id, station_info = _resolve_station_id(station_name)
+    frames = _load_range_power_frames(station_id, start, end, data_type)
+    if data_type == "comparison" and not {"actual", "predicted"}.issubset(frames):
+        missing = "实际" if "actual" not in frames else "预测"
+        raise ToolException(f"{station_info['name']} {start} 至 {end} 缺少{missing}发电量数据，无法进行对比")
+
+    chart_data = _build_range_chart_data(
+        frames,
+        station_info,
+        start,
+        end,
+        data_type,
+        resolved_granularity,
+    )
+    return json.dumps(chart_data, ensure_ascii=False, indent=2)

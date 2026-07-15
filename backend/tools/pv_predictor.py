@@ -19,17 +19,7 @@ pv_predictor.py - 光伏发电预测模块 (LangChain Tool)
   radiation_aware_loss / radiation_stable_loss（TF 自定义损失函数注册）
 
 TODO 留口：
-  1. ✅ predict_power 的 target_date 参数 — 已支持任意日期(YYYY-MM-DD/M月D日/M月D号/M-D/今天/昨天)
-     实现：parse_flexible_date 解析 + predict_station_power 改用底层 _fetch_* 函数
-  2. ModelManager 多站点映射 — 当前硬编码英杰站点路径，后续从配置/DB 读
-  3. 【架构优化】当前 pv_predictor 与 weather_fetcher 同放 Tools/（方案A）。
-     后续引入第二个站点预测模型或 file_io 工具后，建议拆分为方案B：
-       tools/pv_predictor.py     — 薄 @tool 入口（仅 predict_power）
-       models/ensemble.py        — predict_24h_auto + 特征/纠偏/融合
-       models/model_manager.py   — ModelManager
-       models/losses.py          — radiation_aware_loss 等
-       models/era5_adapter.py    — convert_to_era5_format
-     拆分信号：Tools/ 下超过 3 个文件、或 pv_predictor 被其他模块复用 ML 逻辑时
+  1. ModelManager 多站点映射 — 当前硬编码英杰站点路径，后续从配置/DB 读
 """
 import os
 import warnings
@@ -148,11 +138,11 @@ class ModelManager:
 
         # 命中缓存直接返回，不重新加载
         if cache_key in self._cache:
-            print(f"♻️ 模型缓存命中: {station}/{weather_type}")
+            print(f" 模型缓存命中: {station}/{weather_type}")
             return self._cache[cache_key]
 
         # 未命中缓存 → 加载并缓存
-        print(f"📥 首次加载模型: {station}/{weather_type}")
+        print(f" 首次加载模型: {station}/{weather_type}")
         models = self._load_models(weather_type)
         self._cache[cache_key] = models
         return models
@@ -170,10 +160,10 @@ class ModelManager:
         # 【步骤1】根据天气类型选模型目录
         if weather_type == "晴天":
             model_dir = MODEL_SUNNY
-            print("✅ 使用【晴天模型】")
+            print(" 使用【晴天模型】")
         else:
             model_dir = MODEL_CLOUDY
-            print("✅ 使用【多云/非晴天模型】")
+            print(" 使用【多云/非晴天模型】")
 
         # 【步骤2】拼出所有模型文件路径
         # 每个模型文件的作用：
@@ -237,14 +227,14 @@ class ModelManager:
     def clear_cache(self):
         """清空模型缓存（切换站点或调试时用）"""
         self._cache.clear()
-        print("🗑️ 模型缓存已清空")
+        print(" 模型缓存已清空")
 
     def warmup(self, station: str = "英杰"):
         """
         预热：提前加载晴天和多云两套模型。
         Agent 启动时调用一次，首次预测就不用等加载了。
         """
-        print(f"🔥 预热 {station} 站点模型...")
+        print(f" 预热 {station} 站点模型...")
         self.get_station_models(station, "晴天")
         self.get_station_models(station, "非晴天")
         print(f"✅ 预热完成")
@@ -640,7 +630,7 @@ def predict_24h_auto(history_era5: pd.DataFrame, future_era5: pd.DataFrame) -> t
     """
     # 【步骤1】判断天气类型 → 决定用晴天模型还是多云模型
     weather = judge_weather_type(future_era5)
-    print(f"\n🌤️ 天气类型：{weather}")
+    print(f"\n 天气类型：{weather}")
 
     # 【步骤2】通过 ModelManager 加载模型（带缓存，第二次调用不重新加载）
     manager = ModelManager()
@@ -807,7 +797,7 @@ def compare_with_actual(pred_df: pd.DataFrame, station_id: str, predict_date: st
         )
 
         if len(merged) == 0:
-            return "⚠️ 预测与实际数据时间无法对齐，跳过对比。"
+            return " 预测与实际数据时间无法对齐，跳过对比。"
 
         # 计算误差指标
         pred = merged["fusion"].values
@@ -834,7 +824,7 @@ def compare_with_actual(pred_df: pd.DataFrame, station_id: str, predict_date: st
         )
 
     except Exception as e:
-        return f"⚠️ 历史对比查询失败: {e}（MySQL 可能未启动或表未建）"
+        return f" 历史对比查询失败: {e}（MySQL 可能未启动或表未建）"
 
 
 # ============================================================
@@ -844,9 +834,6 @@ def compare_with_actual(pred_df: pd.DataFrame, station_id: str, predict_date: st
 def format_prediction_summary(pred_df: pd.DataFrame, station_name: str,
                               weather_type: str, comparison: str = "",
                               weather_data_mode: str = "forecast") -> str:
-
-    # todo 后期可以把各模型的预测结果去除，目前来看有些冗余。只展示最终模型的结果即可
-
     """
     将预测结果 DataFrame 转为 LLM 可读的文字摘要。
 
@@ -885,7 +872,7 @@ def format_prediction_summary(pred_df: pd.DataFrame, station_name: str,
 
     mode_label = "历史实况回测" if weather_data_mode == "historical_actual" else "未来预报"
     lines = [
-        f"✅ {station_name} 预测完成（{weather_type}）",
+        f" {station_name} 预测完成（{weather_type}）",
         f"数据模式: {mode_label}",
         f"总发电量: {total_power:.1f} kWh",
         f"峰值时段: {peak_hour}:00，峰值: {peak_power:.1f} kWh",
@@ -954,7 +941,7 @@ def predict_station_power(station_name: str, lat: float, lon: float,
         station_id, predict_date, weather_data_mode=prediction_mode
     )
     if cached_pred is not None:
-        print(f"\n⚡ 预测缓存命中，跳过气象拉取和模型预测")
+        print(f"\n 预测缓存命中，跳过气象拉取和模型预测")
         # 缓存里只有 fusion 列，补齐其他模型列(用 fusion 填充)保持 DataFrame 结构一致
         cached_pred["xgb"] = cached_pred["fusion"]
         cached_pred["lgb"] = cached_pred["fusion"]
@@ -968,7 +955,7 @@ def predict_station_power(station_name: str, lat: float, lon: float,
         summary = format_prediction_summary(cached_pred, station_name, weather_type, comparison, prediction_mode)
         return summary, cached_pred, weather_type
 
-    print(f"\n🚀 开始预测 {station_name} 站点 {predict_date} 发电量")
+    print(f"\n 开始预测 {station_name} 站点 {predict_date} 发电量")
     print(f"   历史基准日: {history_date}")
     print(f"   经纬度: lat={lat}, lon={lon}")
 
@@ -977,7 +964,7 @@ def predict_station_power(station_name: str, lat: float, lon: float,
     today = datetime.now().date()
     history_is_historical = datetime.strptime(history_date, "%Y-%m-%d").date() < today
     history_label = "历史气象" if history_is_historical else "预报气象"
-    print(f"\n📥 步骤1: 拉取{history_label} ({history_date})...")
+    print(f"\n 步骤1: 拉取{history_label} ({history_date})...")
     if history_is_historical:
         history_openmeteo = read_archive_cache(station_id, history_date)
         if history_openmeteo is not None:
@@ -999,7 +986,7 @@ def predict_station_power(station_name: str, lat: float, lon: float,
     # 【步骤2】拉取目标日气象（predict_date 24h）
     # 历史目标日使用历史实况回测，今天及未来目标日使用预报。
     target_label = "历史实况" if prediction_mode == PREDICTION_MODE_HISTORICAL else "未来预报"
-    print(f"\n📥 步骤2: 拉取{target_label}气象 ({predict_date})...")
+    print(f"\n 步骤2: 拉取{target_label}气象 ({predict_date})...")
     if prediction_mode == PREDICTION_MODE_HISTORICAL:
         future_openmeteo = read_archive_cache(station_id, predict_date)
         if future_openmeteo is not None:
@@ -1019,34 +1006,34 @@ def predict_station_power(station_name: str, lat: float, lon: float,
         raise ToolException(f"未来气象拉取失败: {predict_date}")
 
     # 【步骤3】转换为 ERA5 格式
-    print(f"\n🔄 步骤3: 转换 ERA5 格式...")
+    print(f"\n 步骤3: 转换 ERA5 格式...")
     history_era5 = convert_to_era5_format(history_openmeteo)
     future_era5 = convert_to_era5_format(future_openmeteo)
     print(f"   历史 ERA5: {history_era5.shape}, 未来 ERA5: {future_era5.shape}")
 
     # 【步骤4】执行 24h 预测
-    print(f"\n🚀 步骤4: 执行 24h 预测...")
+    print(f"\n 步骤4: 执行 24h 预测...")
     _, pred_df, weather_type = predict_24h_auto(history_era5, future_era5)
     print(f"   预测完成: {len(pred_df)} 小时, 天气类型: {weather_type}")
 
     # 【步骤5】历史对比（查 MySQL 实际发电量）
     # 注意：如果是预测今天，实际值可能还没入库，compare_with_actual 会返回提示
-    print(f"\n📊 步骤5: 历史对比...")
+    print(f"\n 步骤5: 历史对比...")
     comparison = compare_with_actual(pred_df, station_id, predict_date)
 
     # 【步骤6】生成摘要
-    print(f"\n📝 步骤6: 生成摘要...")
+    print(f"\n 步骤6: 生成摘要...")
     summary = format_prediction_summary(pred_df, station_name, weather_type, comparison, prediction_mode)
 
     # 【步骤7】预测结果写入缓存(当天有效，当天结束后逻辑删除)
-    print(f"\n💾 步骤7: 写入预测缓存...")
+    print(f"\n 步骤7: 写入预测缓存...")
     try:
         write_prediction_cache(
             station_id, predict_date, pred_df, weather_type,
             weather_data_mode=prediction_mode,
         )
     except Exception as e:
-        print(f"   ⚠️ 预测缓存写入失败(不影响预测结果): {e}")
+        print(f"   预测缓存写入失败(不影响预测结果): {e}")
 
     return summary, pred_df, weather_type
 
@@ -1093,7 +1080,7 @@ def predict_power(
     history_date = (datetime.strptime(predict_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
-    print(f"\n📅 日期解析: target_date='{target_date}' → predict_date={predict_date}, history_date={history_date}")
+    print(f"\n 日期解析: target_date='{target_date}' → predict_date={predict_date}, history_date={history_date}")
 
     # 【步骤1】查站点经纬度
     print(f"\n🔍 查询站点信息: {station_name}")

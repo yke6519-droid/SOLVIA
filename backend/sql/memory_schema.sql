@@ -22,3 +22,15 @@ CREATE TABLE IF NOT EXISTS agent_summary_store (
 
 -- 旧环境升级请执行 sql/migrations/001_phase1_memory_schema.sql。
 -- 不在此处创建测试清理 Event，避免对话记录被自动删除。
+
+-- Structured chart snapshots for restoring ECharts in historical conversations.
+CREATE TABLE IF NOT EXISTS chart_snapshot_store (
+    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+    session_id  VARCHAR(255) NOT NULL,
+    user_id     BIGINT NOT NULL,
+    message_id  INT NULL,
+    chart_data  JSON NOT NULL,
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_chart_session_created (session_id, user_id, created_at),
+    INDEX idx_chart_message (message_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

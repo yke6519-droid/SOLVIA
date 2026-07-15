@@ -4,7 +4,7 @@ chat.py - 请求/响应数据模型
 对应 Spring 的 DTO / VO 概念。
 """
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import List, Optional
 
 
 class ChatRequest(BaseModel):
