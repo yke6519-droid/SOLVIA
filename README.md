@@ -82,48 +82,18 @@ MySQL / SQLite
 
 ```text
 solar_agent/
-├── Agent/
-│   ├── agent.py                 Agent 构建和执行逻辑
-│   ├── llm.py                   OpenAI 兼容协议的大模型客户端
-│   ├── prompt.py                系统提示词和工具调用规则
-│   ├── memory.py                会话记忆、滑动窗口和摘要
-│   ├── tools.py                 工具统一注册
-│   └── run.py                   Agent 命令行入口
-├── app/
-│   ├── main.py                  FastAPI 应用入口和内置测试页面
-│   ├── routers/
-│   │   ├── auth.py              注册、登录和 Token
-│   │   ├── chat.py              对话和 SSE 流式响应
-│   │   └── sessions.py          会话接口
-│   ├── services/
-│   │   ├── agent_manager.py     Agent 生命周期和会话绑定
-│   │   ├── ask_user_bridge.py   同步 Agent 与异步前端的交互桥
-│   │   ├── auth_service.py      JWT 和 Argon2id
-│   │   └── user_service.py      用户和数据隔离
-│   ├── dependencies/auth.py     当前用户依赖注入
-│   └── schemas/                 API 请求和响应模型
-├── predModels/
-│   └── Tools/
-│       ├── pv_predictor.py      光伏预测和历史回测
-│       ├── weather_fetcher_tool.py 气象数据获取
-│       ├── power_query_tool.py  发电量查询
-│       ├── cache_manager.py     预测和气象缓存
-│       ├── ask_user_tool.py     用户确认工具
-│       ├── import_tool.py       发电数据导入
-│       ├── table_io_tool.py     表格处理
-│       ├── file_io_tool.py      文件生成和验证
-│       └── knowledge_base_tool.py 知识库检索
-├── sql/
-│   ├── init_schema.sql          基础业务表
-│   ├── cache_schema.sql         气象和预测缓存表
-│   ├── memory_schema.sql        会话记忆表
-│   └── migrations/              增量数据库迁移脚本
-├── tests/                       阶段性契约测试
-├── docs/                        交接、架构和学习文档
-├── .env                         本地环境变量，不提交真实密钥
-└── requirements.txt             固定版本依赖
+├── backend/
+│   ├── app/                   FastAPI 应用、路由、服务和 API 模型
+│   ├── Agent/                Agent 编排、提示词、记忆和 LLM 组装
+│   ├── tools/                光伏预测、查询、气象、文件和图表工具
+│   ├── sql/                  数据库结构和迁移脚本
+│   └── temp/                 后端运行时文件和导出目录
+├── frontend/                 独立 Vue 3 + Vite 前端
+├── tests/                    阶段性契约测试
+├── docs/                     交接、架构和学习文档
+├── .env                      本地环境变量，不提交真实密钥
+└── requirements.txt          固定版本依赖
 ```
-
 ## 关键业务链路
 
 ### 普通对话
@@ -170,7 +140,7 @@ Agent 发现站点或日期不明确
 历史回测模式使用了 `prediction_cache.weather_data_mode` 字段。已有数据库需要执行一次迁移：
 
 ```text
-sql/migrations/002_prediction_weather_data_mode.sql
+backend/sql/migrations/002_prediction_weather_data_mode.sql
 ```
 
 迁移后，预测缓存按照以下模式区分：
@@ -211,13 +181,13 @@ ASK_USER_TIMEOUT=120
 ```powershell
 cd D:\AAA_myProjects\howso\myAgent\solar_agent
 $python = "D:\AAA_myProjects\howso\myAgent\solar_agent\.venv\Scripts\python.exe"
-& $python app\main.py
+& $python -m backend.app.main
 ```
 
 服务启动后可以访问：
 
-- API 文档：`http://127.0.0.1:8000/docs`
-- 内置测试页面：`http://127.0.0.1:8000/`
+- API 文档：`http://127.0.0.1:8001/docs`
+- 内置测试页面：`http://127.0.0.1:8001/`
 - 流式对话：`POST /api/chat/stream`
 - 普通对话：`POST /api/chat`
 - 注册：`POST /api/auth/register`
@@ -227,18 +197,18 @@ $python = "D:\AAA_myProjects\howso\myAgent\solar_agent\.venv\Scripts\python.exe"
 
 ```powershell
 $python = "D:\AAA_myProjects\howso\myAgent\solar_agent\.venv\Scripts\python.exe"
-& $python Agent\run.py
+& $python -m backend.Agent.run
 ```
 
 ## 数据库初始化顺序
 
 首次部署时，根据数据库类型执行对应脚本：
 
-1. `sql/init_schema.sql`
-2. `sql/cache_schema.sql`
-3. `sql/memory_schema.sql`
-4. `sql/migrations/001_phase1_memory_schema.sql`
-5. `sql/migrations/002_prediction_weather_data_mode.sql`
+1. `backend/sql/init_schema.sql`
+2. `backend/sql/cache_schema.sql`
+3. `backend/sql/memory_schema.sql`
+4. `backend/sql/migrations/001_phase1_memory_schema.sql`
+5. `backend/sql/migrations/002_prediction_weather_data_mode.sql`
 
 生产环境建议使用迁移脚本管理数据库结构，不要直接删除业务表。
 
@@ -249,7 +219,7 @@ $python = "D:\AAA_myProjects\howso\myAgent\solar_agent\.venv\Scripts\python.exe"
 ```powershell
 $python = "D:\AAA_myProjects\howso\myAgent\solar_agent\.venv\Scripts\python.exe"
 & $python -m pytest -q tests\test_phase1_contract.py
-& $python -m compileall -q Agent app predModels tests
+& $python -m compileall -q backend tests
 ```
 
 重点验证内容包括：

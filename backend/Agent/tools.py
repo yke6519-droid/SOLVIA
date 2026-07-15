@@ -1,0 +1,61 @@
+from backend.tools.weather_fetcher_tool import (
+    get_current_datetime,
+    get_station_location,
+    get_weather_by_range
+)
+
+from backend.tools.pv_predictor import predict_power
+
+from backend.tools.power_query_tool import (
+    get_station_info,
+    get_actual_power,
+    get_actual_power_by_range,
+    get_predicted_power,
+    get_weather_records,
+    get_power_comparison,
+)
+
+from backend.tools.file_io_tool import write_file, read_file, verify_file
+from backend.tools.table_io_tool import export_table, read_table
+from backend.tools.knowledge_base_tool import search_knowledge_base
+from backend.tools.date_parser_tool import parse_date
+from backend.tools.ask_user_tool import ask_user
+from backend.tools.chart_tool import get_power_chart_data
+from backend.tools.import_tool import import_power_data
+
+ALL_TOOLS = [
+    # 站点查询类
+    get_station_location,
+    get_station_info,
+    # 时间查询类
+    get_current_datetime,
+    parse_date,
+    # 气象数据类
+    get_weather_by_range,
+    get_weather_records,
+    # 发电预测类
+    predict_power,
+    # 发电量查询类
+    get_actual_power,
+    get_actual_power_by_range,
+    get_predicted_power,
+    get_power_comparison,
+    # 文件 I/O 类
+    write_file,
+    read_file,
+    verify_file,
+    # 表格导入导出类
+    export_table,
+    read_table,
+    # 知识库检索类
+    search_knowledge_base,
+    # 用户交互类
+    ask_user,
+    # 可视化数据类
+    get_power_chart_data,
+    # 数据导入类
+    import_power_data,
+]
+
+def get_all_tools():
+    return ALL_TOOLS
