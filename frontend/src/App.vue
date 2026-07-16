@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import LoginView from './views/LoginView.vue'
 import PowerChart from './components/PowerChart.vue'
+import AskUserCard from './components/AskUserCard.vue'
 import MarkdownMessage from './components/MarkdownMessage.vue'
 import {
   clearAuth,
@@ -10,6 +11,7 @@ import {
   getSessionMessages,
   getStoredAuth,
   listSessions,
+  renameSession as renameSessionApi,
   replyToQuestion,
   streamChat,
 } from './api'
@@ -36,8 +38,8 @@ const messageList = ref(null)
 const abortController = ref(null)
 const isLoginRoute = computed(() => route.path === '/login')
 const activeSession = computed(() => sessions.value.find((session) => session.id === activeSessionId.value) || null)
-const conversationTitle = computed(() => activeSession.value?.title || 'New photovoltaic task')
-const statusLabel = computed(() => (isStreaming.value ? 'Processing' : 'Online'))
+const conversationTitle = computed(() => activeSession.value?.title || '新会话')
+const statusLabel = computed(() => (pendingQuestion.value ? 'Waiting for reply' : isStreaming.value ? 'Processing' : 'Online'))
 const displayName = computed(() => currentUser.value?.display_name || currentUser.value?.username || 'User')
 let toastTimer = null
 let historyRequestId = 0
@@ -149,10 +151,35 @@ function mergeChartData(currentChart, incomingChart) {
   }
 }
 
+function buildSessionTitle(value) {
+  const normalized = String(value || '').replace(/\s+/g, ' ').trim()
+  return Array.from(normalized).slice(0, 10).join('') || '新会话'
+}
+
+function sessionTitleFromMessages(items) {
+  const firstUserMessage = (items || []).find((item) => item.role === 'user')
+  return buildSessionTitle(firstUserMessage?.content)
+}
+
+function updateLocalSessionTitle(sessionId, title) {
+  const session = sessions.value.find((item) => item.id === sessionId)
+  if (!session || session.titleFromServer) return
+  session.title = buildSessionTitle(title)
+}
+
+function maybeAssignSessionTitleFromFirstMessage(sessionId, content) {
+  const session = sessions.value.find((item) => item.id === sessionId)
+  if (!session || session.titleFromServer) return
+  if (messages.value.some((message) => message.role === 'user')) return
+  updateLocalSessionTitle(sessionId, content)
+}
+
 function mapSession(item) {
+  const serverTitle = String(item.title || item.name || '').trim()
   return {
     id: item.session_id,
-    title: item.title || item.name || item.session_id,
+    title: serverTitle || '新会话',
+    titleFromServer: Boolean(serverTitle && serverTitle !== '新会话'),
     time: formatTime(item.last_message_at),
     lastMessageAt: item.last_message_at || null,
     active: false,
@@ -212,7 +239,11 @@ async function selectSession(session) {
   try {
     const data = await getSessionMessages(session.id)
     if (requestId !== historyRequestId || activeSessionId.value !== session.id) return
-    messages.value = (data.messages || []).map(mapMessage)
+    const historicalMessages = (data.messages || []).map(mapMessage)
+    messages.value = historicalMessages
+    if (!session.titleFromServer) {
+      updateLocalSessionTitle(session.id, sessionTitleFromMessages(historicalMessages))
+    }
     await scrollToBottom()
   } catch (error) {
     if (requestId !== historyRequestId || activeSessionId.value !== session.id) return
@@ -227,7 +258,7 @@ async function createSession() {
   if (isStreaming.value) return
   try {
     const data = await createSessionApi()
-    const session = mapSession({ session_id: data.session_id })
+    const session = mapSession({ session_id: data.session_id, title: data.title })
     sessions.value = [session, ...sessions.value.map((item) => ({ ...item, active: false }))]
     markActiveSession(session.id)
     messages.value = []
@@ -235,6 +266,26 @@ async function createSession() {
     showToast('Operation failed')
   } catch (error) {
     showToast('Operation failed')
+  }
+}
+
+async function renameSession(session) {
+  if (isStreaming.value) return
+  const requestedTitle = window.prompt('重命名会话（最多 10 个字）', session.title)
+  if (requestedTitle === null) return
+  const title = requestedTitle.trim()
+  if (!title) {
+    showToast('会话名称不能为空')
+    return
+  }
+
+  try {
+    const data = await renameSessionApi(session.id, Array.from(title).slice(0, 10).join(''))
+    session.title = data.title || title
+    session.titleFromServer = true
+    showToast('会话已重命名')
+  } catch (error) {
+    showToast(error?.message || '会话重命名失败')
   }
 }
 
@@ -260,7 +311,7 @@ async function removeSession(session) {
 async function ensureActiveSession() {
   if (activeSessionId.value) return activeSessionId.value
   const data = await createSessionApi()
-  const session = mapSession({ session_id: data.session_id })
+  const session = mapSession({ session_id: data.session_id, title: data.title })
   sessions.value = [session, ...sessions.value]
   markActiveSession(session.id)
   return session.id
@@ -324,11 +375,12 @@ function handleAgentStep(message, data) {
 
 async function sendMessage() {
   const content = input.value.trim()
-  if (!content || isStreaming.value) return
+  if (!content || isStreaming.value || pendingQuestion.value) return
 
   let sessionId
   try {
     sessionId = await ensureActiveSession()
+    maybeAssignSessionTitleFromFirstMessage(sessionId, content)
   } catch (error) {
     showToast('Operation failed')
     return
@@ -406,6 +458,9 @@ async function sendMessage() {
             messageId: assistantMessage.id,
             question: data?.question || 'Please provide the required business conditions',
             answer: '',
+            status: 'waiting',
+            submittedAnswer: '',
+            error: '',
           }
         } else if (eventName === 'error') {
           streamFailed = true
@@ -447,22 +502,37 @@ async function sendMessage() {
   }
 }
 
-async function submitQuestionReply() {
+async function submitQuestionReply(answerValue = pendingQuestion.value?.answer) {
   const question = pendingQuestion.value
-  const answer = question?.answer?.trim()
-  if (!question || !answer || !activeSessionId.value || isReplying.value) return
+  const answer = String(answerValue || '').trim()
+  if (!question || !answer || !activeSessionId.value || isReplying.value || question.status === 'submitted') return
+
+  question.answer = answer
+  question.error = ''
+  question.status = 'submitting'
   isReplying.value = true
   try {
     await replyToQuestion(activeSessionId.value, answer)
     const message = findMessage(question.messageId)
-    if (message) message.status = 'streaming'
-    pendingQuestion.value = null
-    showToast('Operation failed')
+    if (message) {
+      completeActiveProcessStep(message)
+      addProcessStep(message, '已收到你的回复，继续执行任务', 'thinking')
+      message.status = 'streaming'
+    }
+    question.submittedAnswer = answer
+    question.status = 'submitted'
+    showToast('已收到回复，任务继续执行')
   } catch (error) {
-    showToast('Operation failed')
+    question.status = 'waiting'
+    question.error = error?.message || '回复发送失败，请重试'
+    showToast(question.error)
   } finally {
     isReplying.value = false
   }
+}
+
+function updatePendingQuestionAnswer(value) {
+  if (pendingQuestion.value) pendingQuestion.value.answer = value
 }
 
 function stopStreaming() {
@@ -607,7 +677,7 @@ onBeforeUnmount(() => {
             <button v-for="session in sessions" :key="session.id" class="session-item" :class="{ active: session.active }" type="button" @click="selectSession(session)">
               <span class="session-signal"></span>
               <span class="session-copy"><span class="session-title">{{ session.title }}</span><span class="session-time">{{ session.time }}</span></span>
-              <span class="session-more" title="删除会话" @click.stop="removeSession(session)">···</span>
+              <span class="session-actions"><span class="session-rename" role="button" tabindex="0" title="重命名会话" @click.stop="renameSession(session)" @keydown.enter.stop="renameSession(session)">✎</span><span class="session-more" title="删除会话" @click.stop="removeSession(session)">···</span></span>
             </button>
           </div>
           <div class="sidebar-section-title">最近结果</div>
@@ -632,7 +702,7 @@ onBeforeUnmount(() => {
           </section>
 
           <section v-else class="conversation-view">
-            <div class="conversation-header"><div><p class="eyebrow">当前会话</p><h2>{{ conversationTitle }}</h2></div><div class="view-switcher"><button type="button" :class="{ selected: activeView === 'conversation' }" @click="activeView = 'conversation'">对话</button><button type="button" :class="{ selected: activeView === 'details' }" @click="activeView = 'details'">任务详情</button></div></div>
+            <div class="conversation-header"><h2>{{ conversationTitle }}</h2><div class="view-switcher"><button type="button" :class="{ selected: activeView === 'conversation' }" @click="activeView = 'conversation'">对话</button><button type="button" :class="{ selected: activeView === 'details' }" @click="activeView = 'details'">任务详情</button></div></div>
             <div ref="messageList" class="message-list">
               <div v-if="isLoadingMessages" class="message-loading">正在加载历史消息…</div>
               <div v-else-if="messages.length === 0" class="message-empty">这是一个新的会话，输入任务开始吧。</div>
@@ -643,7 +713,16 @@ onBeforeUnmount(() => {
                   <div class="message-card" :class="{ 'result-card': message.status === 'complete' && message.chartData, 'message-error': message.status === 'error' }">
                     <MarkdownMessage v-if="message.content" :content="message.content" :streaming="message.status === 'streaming'" />
                     <p v-else-if="message.status === 'streaming'" class="message-placeholder">{{ message.processSteps && message.processSteps.length ? message.processSteps[message.processSteps.length - 1].label : '正在理解你的任务…' }}</p>
-                    <div v-if="message.status === 'waiting' && pendingQuestion?.messageId === message.id" class="confirmation-card"><div class="confirmation-heading"><span class="confirmation-mark">!</span><div><strong>需要你的确认</strong><span>补充信息后任务才会继续执行</span></div></div><p class="question-copy">{{ pendingQuestion.question }}</p><div class="confirmation-actions"><input v-model="pendingQuestion.answer" class="question-reply-input" type="text" placeholder="输入你的确认或补充条件" :disabled="isReplying" @keydown.enter="submitQuestionReply" /><button class="primary-button" type="button" :disabled="isReplying" @click="submitQuestionReply">{{ isReplying ? '发送中…' : '确认回复' }}</button></div></div>
+                    <AskUserCard
+                      v-if="pendingQuestion?.messageId === message.id && (message.status === 'waiting' || pendingQuestion.status === 'submitting' || pendingQuestion.status === 'submitted')"
+                      :question="pendingQuestion.question"
+                      :answer="pendingQuestion.answer"
+                      :status="pendingQuestion.status"
+                      :submitted-answer="pendingQuestion.submittedAnswer"
+                      :error="pendingQuestion.error"
+                      @update:answer="updatePendingQuestionAnswer"
+                      @submit="submitQuestionReply"
+                    />
                     <div v-if="message.processSteps && message.processSteps.length && (message.status === 'streaming' || message.status === 'waiting' || message.status === 'stopped' || message.status === 'error')" class="execution-track"><div v-for="step in message.processSteps" :key="step.id" class="execution-item" :class="[step.status, step.type]"><span></span>{{ step.label }}</div></div>
                     <div v-if="message.status === 'complete' && message.chartData" class="prediction-result">
                       <div class="result-topline"><span>图表结果</span><span>{{ chartRangeLabel(message.chartData) }}</span></div>
@@ -659,7 +738,7 @@ onBeforeUnmount(() => {
           </section>
 
           <div class="composer-wrap">
-            <div class="composer"><button class="composer-add" type="button" aria-label="添加文件" @click="showToast('文件导入将在后续版本接入')">+</button><input v-model="input" type="text" placeholder="告诉我你想完成的光伏任务" :disabled="isStreaming" @keydown.enter="sendMessage" /><button v-if="isStreaming" class="stop-button" type="button" @click="stopStreaming">停止</button><button v-else class="send-button" type="button" aria-label="发送消息" @click="sendMessage">↗</button></div>
+            <div class="composer"><button class="composer-add" type="button" aria-label="添加文件" @click="showToast('文件导入将在后续版本接入')">+</button><input v-model="input" type="text" placeholder="告诉我你想完成的光伏任务" :disabled="isStreaming || Boolean(pendingQuestion)" @keydown.enter="sendMessage" /><button v-if="isStreaming" class="stop-button" type="button" @click="stopStreaming">停止</button><button v-else class="send-button" type="button" aria-label="发送消息" @click="sendMessage">↗</button></div>
             <div class="composer-foot"><span>SolarAgent 可能需要你确认关键业务条件</span><span>Enter 发送</span></div>
           </div>
         </main>

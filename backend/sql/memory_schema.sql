@@ -1,6 +1,17 @@
 -- SolarAgent 对话记忆表（生产安全版）
 -- 仅负责建表，不在应用启动时修改 MySQL 全局配置。
 
+CREATE TABLE IF NOT EXISTS chat_session (
+    session_id      VARCHAR(255) NOT NULL,
+    user_id         BIGINT       NOT NULL,
+    title           VARCHAR(10)  NOT NULL DEFAULT '新会话',
+    title_source    VARCHAR(20)  NOT NULL DEFAULT 'auto',
+    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    last_message_at DATETIME     NULL,
+    PRIMARY KEY (session_id),
+    KEY idx_chat_session_user_updated (user_id, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='会话元数据';
 CREATE TABLE IF NOT EXISTS message_store (
     id          INT AUTO_INCREMENT PRIMARY KEY,
     session_id  VARCHAR(255) NOT NULL,

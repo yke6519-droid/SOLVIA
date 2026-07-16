@@ -22,7 +22,13 @@ class ReplyRequest(BaseModel):
 class SessionResponse(BaseModel):
     """会话创建响应"""
     session_id: str
+    title: str = "新会话"
     message: str = "会话已创建"
+
+
+class SessionRenameRequest(BaseModel):
+    """会话重命名请求"""
+    title: str = Field(..., min_length=1, max_length=10, description="会话名称，最长10个字")
 
 
 class MessageItem(BaseModel):

@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 class AskUserBridge:
     """每个 session 独立的人工确认桥接器。"""
 
-    def __init__(self, session_id: str, timeout: int = 120):
+    def __init__(self, session_id: str, timeout: int = 60):
         self.session_id = session_id
         self.timeout = timeout
         self._reply_event = threading.Event()
@@ -18,17 +18,19 @@ class AskUserBridge:
         self._queue: Optional[asyncio.Queue] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._waiting = False
-
+    
     def attach(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
         self._queue = queue
         self._loop = loop
-
+    
+    
     def detach(self):
         self._queue = None
         self._loop = None
         self._waiting = False
         self._reply = None
         self._reply_event.clear()
+
 
     def ask(self, question: str) -> str:
         """推送真实问题并阻塞工具线程等待回复。"""
@@ -43,6 +45,7 @@ class AskUserBridge:
             return f"用户回复: {self._reply or ''}"
         return "用户回复: (超时未回复，请重新提问)"
 
+
     def reply(self, answer: str):
         """设置回复并唤醒等待线程。"""
         if not self._waiting:
@@ -50,15 +53,18 @@ class AskUserBridge:
         self._reply = answer
         self._reply_event.set()
 
+
     def cancel(self):
         """取消等待中的交互。"""
         self._reply = "(会话已取消)"
         self._waiting = False
         self._reply_event.set()
 
+
     @property
     def is_waiting(self) -> bool:
         return self._waiting
+
 
     @property
     def is_active(self) -> bool:

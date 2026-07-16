@@ -171,6 +171,13 @@ export async function deleteSession(sessionId) {
   return apiFetch(`/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
 }
 
+export async function renameSession(sessionId, title) {
+  return apiFetch('/sessions/' + encodeURIComponent(sessionId), {
+    method: 'PATCH',
+    body: { title },
+  })
+}
+
 export async function replyToQuestion(sessionId, answer) {
   return apiFetch(`/chat/${encodeURIComponent(sessionId)}/reply`, {
     method: 'POST',

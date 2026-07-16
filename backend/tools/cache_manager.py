@@ -9,7 +9,7 @@ cache_manager.py - 缓存管理模块
 设计原则:
   - 每个缓存表对应一组 read / write / clean 方法
   - read 方法返回 DataFrame(命中) 或 None(未命中),由调用方决定下一步
-  - write 方法用 INSERT IGNORE 幂等写入,重复执行不会报错
+  - write 方法用 UPSERT 幂等写入,失效记录可重新激活
   - clean 方法在 read 时被动触发(惰性清理),不依赖定时任务
 
 被以下模块调用:
@@ -101,13 +101,11 @@ def write_prediction_cache(station_id: str, predict_date: str,
                            pred_df: pd.DataFrame, weather_type: str,
                            weather_data_mode: str = PREDICTION_MODE_FORECAST) -> None:
     """
-    写入预测缓存。幂等(INSERT IGNORE)。
+    写入预测缓存。
 
-    参数:
-        station_id: 站点ID
-        predict_date: 预测日期 "YYYY-MM-DD"
-        pred_df: 预测结果 DataFrame(需含 time 和 fusion 列)
-        weather_type: 天气类型
+    使用 UPSERT 保证逻辑失效(status=0)的旧记录可以被重新激活：
+    - 唯一键不存在：插入新记录
+    - 唯一键已存在：更新预测值、预测时间和状态
     """
     engine = create_engine(MYSQL_URL)
     rows = []
@@ -120,17 +118,31 @@ def write_prediction_cache(station_id: str, predict_date: str,
             "predict_date": predict_date,
             "weather_data_mode": weather_data_mode,
         })
+
+    affected_rows = 0
     with engine.begin() as conn:
         for r in rows:
-            conn.execute(text("""
-                INSERT IGNORE INTO prediction_cache
+            result = conn.execute(text("""
+                INSERT INTO prediction_cache
                     (station_id, record_time, power_kwh, weather_type, predict_date,
                      weather_data_mode, status)
                 VALUES
                     (:station_id, :record_time, :power_kwh, :weather_type, :predict_date,
                      :weather_data_mode, 1)
+                ON DUPLICATE KEY UPDATE
+                    power_kwh = :power_kwh,
+                    weather_type = :weather_type,
+                    predict_date = :predict_date,
+                    predicted_at = CURRENT_TIMESTAMP,
+                    status = 1
             """), r)
-    print(f"💾 预测结果已缓存: {station_id} / {predict_date} ({len(rows)} 条)")
+            if result.rowcount and result.rowcount > 0:
+                affected_rows += result.rowcount
+
+    print(
+        f"💾 预测缓存已写入/更新: {station_id} / {predict_date} "
+        f"({len(rows)} 条, 数据库受影响行数 {affected_rows})"
+    )
 
 
 def clean_prediction_cache() -> int:

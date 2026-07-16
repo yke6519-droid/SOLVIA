@@ -24,7 +24,7 @@ table_io_tool.py - 表格导入导出工具模块 (LangChain Tools)
 """
 import os
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated, Optional
 
 from langchain_core.tools import tool, ToolException
@@ -304,6 +304,7 @@ def _fetch_data(
         read_prediction_cache, read_archive_cache, read_forecast_cache,
         get_prediction_data_mode,
     )
+    
     from backend.tools.power_query_tool import _query_actual_power, _query_actual_power_range
 
     if data_type == "actual":
@@ -339,8 +340,14 @@ def _fetch_data(
             from backend.tools.pv_predictor import predict_station_power
             lat = info["lat"]
             lon = info["lon"]
+            history_date = (datetime.strptime(predict_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
             summary, pred_df, weather_type = predict_station_power(
-                station_name, lat, lon, station_id, predict_date
+                station_name=station_name,
+                lat=lat,
+                lon=lon,
+                station_id=station_id,
+                predict_date=predict_date,
+                history_date=history_date,
             )
             df = pred_df
 
@@ -364,8 +371,14 @@ def _fetch_data(
             from backend.tools.pv_predictor import predict_station_power
             lat = info["lat"]
             lon = info["lon"]
+            history_date = (datetime.strptime(predict_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
             summary, pred_df, weather_type = predict_station_power(
-                station_name, lat, lon, station_id, predict_date
+                station_name=station_name,
+                lat=lat,
+                lon=lon,
+                station_id=station_id,
+                predict_date=predict_date,
+                history_date=history_date,
             )
 
         # 查实际

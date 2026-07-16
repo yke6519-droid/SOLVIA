@@ -361,6 +361,7 @@ def get_power_chart_data_by_range(
 
     start = parse_flexible_date(start_date)
     end = parse_flexible_date(end_date)
+    
     if pd.to_datetime(start) > pd.to_datetime(end):
         start, end = end, start
     day_count = (pd.to_datetime(end) - pd.to_datetime(start)).days + 1

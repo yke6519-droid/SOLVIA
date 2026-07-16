@@ -32,6 +32,16 @@ def set_input_handler(handler: Callable[[str], str]) -> None:
     _input_handler = handler
 
 
+
+def request_user_input(question: str) -> str:
+    """调用当前运行环境注入的用户输入处理器。
+
+    该函数供非 LangChain 工具代码（例如预测确认门）复用。
+    Web 环境会进入 AskUserBridge，CLI 环境会进入 input()。
+    """
+    return _input_handler(question)
+
+
 @tool
 def ask_user(
     question: Annotated[str, "要向用户提出的问题,需清晰描述需要用户确认或选择的内容"],
@@ -52,5 +62,5 @@ def ask_user(
         用户的回复内容,带"用户回复:"前缀,便于 LLM 识别
     """
     print(f"\n🤔 {question}")
-    answer = _input_handler(question)
+    answer = request_user_input(question)
     return f"用户回复: {answer}"

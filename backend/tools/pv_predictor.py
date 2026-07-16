@@ -921,10 +921,18 @@ def predict_station_power(station_name: str, lat: float, lon: float,
             pred_df: 预测结果 DataFrame（供下游 file_io 工具存 Excel）
             weather_type: 天气类型
     """
+    # 内部调用方可能绕过 predict_power 直接进入本层（例如图表和导出），
+    # 因此在这里补齐日期默认值，避免 history_date=None 进入 strptime。
+    if not predict_date:
+        predict_date = datetime.now().strftime("%Y-%m-%d")
+    if not history_date:
+        history_date = (
+            datetime.strptime(predict_date, "%Y-%m-%d") - timedelta(days=1)
+        ).strftime("%Y-%m-%d")
+
     # 延迟导入 weather_fetcher 底层函数，避免循环依赖
     from backend.tools.weather_fetcher_tool import _fetch_from_archive, _fetch_from_forecast
 
-    # predict_date / history_date 由上层 predict_power 解析后传入，不再在这里默认今天
     from backend.tools.cache_manager import (
         read_prediction_cache, write_prediction_cache,
         read_archive_cache, write_archive_cache,
@@ -954,6 +962,10 @@ def predict_station_power(station_name: str, lat: float, lon: float,
         weather_type = "缓存(未知)"
         summary = format_prediction_summary(cached_pred, station_name, weather_type, comparison, prediction_mode)
         return summary, cached_pred, weather_type
+
+    # 【确认门】只有缓存未命中、确实需要重新预测时才请求确认。
+    # 这样图表/导出等复用本层的调用路径也不会绕过确认。
+    _request_prediction_confirmation(station_name, predict_date)
 
     print(f"\n 开始预测 {station_name} 站点 {predict_date} 发电量")
     print(f"   历史基准日: {history_date}")
@@ -1042,6 +1054,44 @@ def predict_station_power(station_name: str, lat: float, lon: float,
 # Layer 1: LLM 工具入口 — @tool predict_power
 # ============================================================
 
+def _normalize_confirmation_answer(raw_answer: str) -> str:
+    """清理 AskUserBridge/CLI 返回的确认文本。"""
+    answer = str(raw_answer or "").strip()
+    for prefix in ("用户回复:", "用户回复："):
+        if answer.startswith(prefix):
+            answer = answer[len(prefix):].strip()
+    return answer
+
+
+def _request_prediction_confirmation(station_name: str, predict_date: str) -> str:
+    """在预测真正执行前，强制请求用户确认标准站点和日期。
+
+    这里复用 ask_user 的底层输入处理器，因此 Web 请求会进入AskUserBridge，
+    CLI 运行仍然使用 input()；但确认逻辑由预测工具自身保证，
+    不再依赖 Agent 是否记得先调用 ask_user。
+    """
+    from backend.tools.ask_user_tool import request_user_input
+
+    question = (
+        "请确认预测条件：\n"
+        f"- 站点：{station_name}\n"
+        f"- 日期：{predict_date}\n\n"
+        "回复“确认”或“确定”开始预测；回复“取消”终止本次预测。"
+    )
+    answer = _normalize_confirmation_answer(request_user_input(question))
+    compact = "".join(answer.lower().split())
+
+    if any(token in compact for token in ("取消", "否", "不确认", "停止", "不要")):
+        raise ToolException("用户取消了本次预测。")
+
+    if not any(token in compact for token in ("确认", "确定", "同意", "继续", "开始")):
+        raise ToolException(
+            "未收到明确的预测确认，预测尚未执行。请回复“确认”或“取消”。"
+        )
+
+    return answer
+
+
 @tool(response_format="content_and_artifact")
 def predict_power(
     station_name: Annotated[str, "站点名称，例如 '英杰'"],
@@ -1098,6 +1148,7 @@ def predict_power(
     station_id = station_info["station_id"]
     full_name = station_info["name"]
 
+
     # 【步骤2】调用站点整合方法完成完整预测流程
     summary, pred_df, weather_type = predict_station_power(
         station_name=full_name,
@@ -1109,12 +1160,6 @@ def predict_power(
     )
 
     return summary, pred_df
-
-
-# ============================================================
-# 模块自测
-# ============================================================
-if __name__ == "__main__":
     # 自测时把 solar_agent 根目录加入 path，保证 backend.tools 包能被导入
     # 当前文件路径: solar_agent/backend/tools/pv_predictor.py
     # 需要往上跳 3 级到 solar_agent/

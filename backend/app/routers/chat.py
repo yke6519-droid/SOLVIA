@@ -9,7 +9,7 @@ from sse_starlette.sse import EventSourceResponse
 from backend.app.dependencies.auth import get_current_user
 from backend.app.schemas.chat import ChatRequest, ReplyRequest
 from backend.app.services.agent_manager import agent_manager
-from backend.app.routers.sessions import _verify_session_ownership
+from backend.app.routers.sessions import _verify_session_ownership, ensure_session_title
 from backend.app.services.chart_snapshot_store import save_chart_snapshot
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -64,9 +64,14 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
     """Execute the current user's session with SSE streaming output."""
     user_id = current_user["user_id"]
     _verify_session_ownership(req.session_id, user_id)
+
+
     lock = agent_manager.get_lock(req.session_id)
     if lock.locked():
         raise HTTPException(409, detail="当前会话正在处理请求")
+
+    # 首条用户消息到达时创建/补齐会话名称；手动重命名不会被覆盖。
+    ensure_session_title(req.session_id, user_id, req.message)
 
     executor = agent_manager.get_agent(req.session_id, user_id=user_id)
     bridge = agent_manager.get_or_create_bridge(req.session_id)
@@ -159,6 +164,9 @@ async def chat(req: ChatRequest, current_user: dict = Depends(get_current_user))
     lock = agent_manager.get_lock(req.session_id)
     if lock.locked():
         raise HTTPException(409, detail="当前会话正在处理请求")
+
+    # 首条用户消息到达时创建/补齐会话名称；手动重命名不会被覆盖。
+    ensure_session_title(req.session_id, user_id, req.message)
 
     executor = agent_manager.get_agent(req.session_id, user_id=user_id)
     async with lock:

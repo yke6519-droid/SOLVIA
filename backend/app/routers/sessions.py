@@ -1,17 +1,22 @@
-"""会话管理路由。"""
+"""会话管理路由与会话元数据服务。"""
 import json
 import logging
 import os
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import create_engine, text
 
 from backend.app.dependencies.auth import get_current_user
-from backend.app.schemas.chat import SessionResponse
+from backend.app.schemas.chat import SessionResponse, SessionRenameRequest
 from backend.app.services.agent_manager import agent_manager
 from backend.app.services.chart_snapshot_store import delete_chart_snapshots, load_chart_snapshots
 
 router = APIRouter(prefix="/api", tags=["sessions"])
 logger = logging.getLogger(__name__)
+
+DEFAULT_SESSION_TITLE = "新会话"
+MAX_SESSION_TITLE_LENGTH = 10
 
 
 def _get_engine():
@@ -22,24 +27,96 @@ def _get_engine():
     return create_engine(mysql_url)
 
 
-def _verify_session_ownership(session_id: str, user_id: int) -> None:
-    """校验会话属于当前用户。"""
-    if session_id in agent_manager._agents:
-        executor = agent_manager._agents[session_id]
-        owner_id = getattr(executor.memory, "user_id", None)
-        if owner_id is None:
-            raise HTTPException(404, detail="会话缺少有效所有者信息")
-        if owner_id != user_id:
-            raise HTTPException(403, detail="无权操作此会话")
-        return
+def build_session_title(message: str) -> str:
+    """从首条用户消息生成不超过 10 个 Unicode 字符的会话名称。"""
+    normalized = " ".join(str(message or "").split())
+    title = "".join(list(normalized)[:MAX_SESSION_TITLE_LENGTH])
+    return title or DEFAULT_SESSION_TITLE
 
+
+def _extract_user_content(raw_message: str) -> str:
+    """从 LangChain message_store JSON 中提取用户消息文本。"""
+    try:
+        payload = json.loads(raw_message)
+        message_type = payload.get("type", "")
+        if message_type not in {"human", "user"}:
+            return ""
+        return str(payload.get("data", {}).get("content", "") or "")
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return ""
+
+
+def _get_session_metadata(session_id: str, user_id: int):
+    engine = _get_engine()
+    try:
+        with engine.connect() as conn:
+            return conn.execute(text(
+                "SELECT session_id, user_id, title, title_source, last_message_at "
+                "FROM chat_session WHERE session_id = :sid AND user_id = :uid"
+            ), {"sid": session_id, "uid": user_id}).fetchone()
+    finally:
+        engine.dispose()
+
+
+def ensure_session_title(session_id: str, user_id: int, first_message: str = "") -> str:
+    """确保会话元数据存在，并在自动命名状态下写入首条消息名称。"""
+    title = build_session_title(first_message)
+    engine = _get_engine()
+    try:
+        with engine.begin() as conn:
+            row = conn.execute(text(
+                "SELECT title, title_source FROM chat_session "
+                "WHERE session_id = :sid AND user_id = :uid FOR UPDATE"
+            ), {"sid": session_id, "uid": user_id}).fetchone()
+
+            if row is None:
+                existing_message = conn.execute(text(
+                    "SELECT message FROM message_store "
+                    "WHERE session_id = :sid AND user_id = :uid "
+                    "ORDER BY created_at, id LIMIT 1"
+                ), {"sid": session_id, "uid": user_id}).fetchone()
+                seed_message = (
+                    _extract_user_content(existing_message[0])
+                    if existing_message else first_message
+                )
+                title = build_session_title(seed_message)
+                conn.execute(text(
+                    "INSERT INTO chat_session "
+                    "(session_id, user_id, title, title_source, last_message_at) "
+                    "VALUES (:sid, :uid, :title, 'auto', NOW())"
+                ), {"sid": session_id, "uid": user_id, "title": title})
+                return title
+
+            current_title = row[0] or DEFAULT_SESSION_TITLE
+            if row[1] == "auto" and current_title == DEFAULT_SESSION_TITLE and first_message:
+                conn.execute(text(
+                    "UPDATE chat_session SET title = :title, last_message_at = NOW() "
+                    "WHERE session_id = :sid AND user_id = :uid AND title_source = 'auto'"
+                ), {"sid": session_id, "uid": user_id, "title": title})
+                return title
+
+            conn.execute(text(
+                "UPDATE chat_session SET last_message_at = NOW() "
+                "WHERE session_id = :sid AND user_id = :uid"
+            ), {"sid": session_id, "uid": user_id})
+            return current_title
+    finally:
+        engine.dispose()
+
+
+def _verify_session_ownership(session_id: str, user_id: int) -> None:
+    """校验会话属于当前用户，优先使用会话元数据表。"""
     engine = _get_engine()
     try:
         with engine.connect() as conn:
             row = conn.execute(text(
-                "SELECT user_id FROM message_store WHERE session_id = :sid "
-                "ORDER BY created_at LIMIT 1"
+                "SELECT user_id FROM chat_session WHERE session_id = :sid"
             ), {"sid": session_id}).fetchone()
+            if row is None:
+                row = conn.execute(text(
+                    "SELECT user_id FROM message_store WHERE session_id = :sid "
+                    "ORDER BY created_at, id LIMIT 1"
+                ), {"sid": session_id}).fetchone()
             if row is None:
                 row = conn.execute(text(
                     "SELECT user_id FROM agent_summary_store WHERE session_id = :sid LIMIT 1"
@@ -56,48 +133,89 @@ def _verify_session_ownership(session_id: str, user_id: int) -> None:
 
 @router.post("/sessions", response_model=SessionResponse)
 async def create_session(current_user: dict = Depends(get_current_user)):
-    """创建绑定当前用户的会话。"""
+    """创建绑定当前用户的会话，并建立一条会话元数据记录。"""
     session_id = agent_manager.create_session(user_id=current_user["user_id"])
-    return SessionResponse(session_id=session_id)
+    title = ensure_session_title(session_id, current_user["user_id"])
+    return SessionResponse(session_id=session_id, title=title)
 
 
 @router.get("/sessions")
 async def list_sessions(current_user: dict = Depends(get_current_user)):
-    """列出当前用户的会话。"""
+    """列出当前用户的会话及其独立元数据。"""
     user_id = current_user["user_id"]
     engine = _get_engine()
     try:
         with engine.connect() as conn:
-            rows = conn.execute(text(
-                "SELECT session_id, MAX(created_at) AS last_msg FROM message_store "
-                "WHERE user_id = :uid GROUP BY session_id ORDER BY last_msg DESC"
+            metadata_rows = conn.execute(text(
+                "SELECT session_id, title, last_message_at, updated_at "
+                "FROM chat_session WHERE user_id = :uid"
             ), {"uid": user_id}).fetchall()
-        sessions = [{"session_id": r[0], "last_message_at": str(r[1])} for r in rows]
+            message_rows = conn.execute(text(
+                "SELECT session_id, MAX(created_at) AS last_message_at "
+                "FROM message_store WHERE user_id = :uid "
+                "GROUP BY session_id"
+            ), {"uid": user_id}).fetchall()
     finally:
         engine.dispose()
+
+    sessions = {
+        row[0]: {
+            "session_id": row[0],
+            "title": row[1] or DEFAULT_SESSION_TITLE,
+            "last_message_at": str(row[2] or row[3]) if (row[2] or row[3]) else None,
+        }
+        for row in metadata_rows
+    }
+    for row in message_rows:
+        sessions.setdefault(row[0], {
+            "session_id": row[0],
+            "title": DEFAULT_SESSION_TITLE,
+            "last_message_at": str(row[1]) if row[1] else None,
+        })
+        if row[1]:
+            sessions[row[0]]["last_message_at"] = str(row[1])
+
     for sid, executor in agent_manager._agents.items():
-        if getattr(executor.memory, "user_id", None) == user_id and not any(s["session_id"] == sid for s in sessions):
-            sessions.append({"session_id": sid, "last_message_at": None})
-    return {"sessions": sessions}
+        if getattr(executor.memory, "user_id", None) == user_id:
+            sessions.setdefault(sid, {
+                "session_id": sid,
+                "title": DEFAULT_SESSION_TITLE,
+                "last_message_at": None,
+            })
+
+    return {
+        "sessions": sorted(
+            sessions.values(),
+            key=lambda item: item.get("last_message_at") or "",
+            reverse=True,
+        )
+    }
 
 
 @router.get("/sessions/{session_id}/messages")
 async def get_messages(session_id: str, current_user: dict = Depends(get_current_user)):
-    """Return conversation messages plus structured chart snapshots for ECharts."""
-    _verify_session_ownership(session_id, current_user["user_id"])
+    """返回会话消息、会话名称和结构化图表快照。"""
+    user_id = current_user["user_id"]
+    _verify_session_ownership(session_id, user_id)
     engine = _get_engine()
     try:
         with engine.connect() as conn:
+            session_row = conn.execute(text(
+                "SELECT title FROM chat_session "
+                "WHERE session_id = :sid AND user_id = :uid"
+            ), {"sid": session_id, "uid": user_id}).fetchone()
             rows = conn.execute(text(
                 "SELECT id, message, created_at FROM message_store "
-                "WHERE session_id = :sid AND user_id = :uid ORDER BY created_at, id"
-            ), {"sid": session_id, "uid": current_user["user_id"]}).fetchall()
+                "WHERE session_id = :sid AND user_id = :uid "
+                "ORDER BY created_at, id"
+            ), {"sid": session_id, "uid": user_id}).fetchall()
     finally:
         engine.dispose()
 
     messages = []
     message_index_by_id = {}
     assistant_indices = []
+    first_user_content = ""
     for row in rows:
         try:
             msg = json.loads(row[1])
@@ -105,11 +223,14 @@ async def get_messages(session_id: str, current_user: dict = Depends(get_current
             if msg_type not in {"human", "user", "ai", "assistant"}:
                 continue
             role = "user" if msg_type in {"human", "user"} else "assistant"
+            content = msg.get("data", {}).get("content", "")
             item = {
                 "role": role,
-                "content": msg.get("data", {}).get("content", ""),
+                "content": content,
                 "created_at": str(row[2]),
             }
+            if role == "user" and not first_user_content:
+                first_user_content = str(content or "")
             message_index_by_id[int(row[0])] = len(messages)
             if role == "assistant":
                 assistant_indices.append(len(messages))
@@ -117,7 +238,11 @@ async def get_messages(session_id: str, current_user: dict = Depends(get_current
         except (json.JSONDecodeError, IndexError, TypeError, ValueError):
             continue
 
-    for snapshot in load_chart_snapshots(session_id, current_user["user_id"]):
+    title = session_row[0] if session_row else None
+    if not title:
+        title = build_session_title(first_user_content)
+
+    for snapshot in load_chart_snapshots(session_id, user_id):
         target_index = message_index_by_id.get(snapshot.get("message_id"))
         if target_index is None and assistant_indices:
             target_index = assistant_indices[-1]
@@ -128,19 +253,55 @@ async def get_messages(session_id: str, current_user: dict = Depends(get_current
         if charts:
             messages[target_index]["chart_data"] = charts[0]
 
-    return {"session_id": session_id, "messages": messages}
+    return {"session_id": session_id, "title": title, "messages": messages}
+
+
+@router.patch("/sessions/{session_id}")
+async def rename_session(
+    session_id: str,
+    req: SessionRenameRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """手动重命名会话。"""
+    user_id = current_user["user_id"]
+    _verify_session_ownership(session_id, user_id)
+    title = build_session_title(req.title)
+    if title == DEFAULT_SESSION_TITLE and not str(req.title or "").strip():
+        raise HTTPException(422, detail="会话名称不能为空")
+
+    engine = _get_engine()
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "INSERT INTO chat_session "
+                "(session_id, user_id, title, title_source) "
+                "VALUES (:sid, :uid, :title, 'manual') "
+                "ON DUPLICATE KEY UPDATE title = :title, title_source = 'manual'"
+            ), {"sid": session_id, "uid": user_id, "title": title})
+    finally:
+        engine.dispose()
+    return {"session_id": session_id, "title": title}
+
 
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str, current_user: dict = Depends(get_current_user)):
     """删除当前用户的会话及其记忆。"""
-    _verify_session_ownership(session_id, current_user["user_id"])
+    user_id = current_user["user_id"]
+    _verify_session_ownership(session_id, user_id)
     agent_manager.remove_session(session_id)
     engine = _get_engine()
     try:
         with engine.begin() as conn:
-            conn.execute(text("DELETE FROM message_store WHERE session_id = :sid AND user_id = :uid"), {"sid": session_id, "uid": current_user["user_id"]})
-            conn.execute(text("DELETE FROM agent_summary_store WHERE session_id = :sid AND user_id = :uid"), {"sid": session_id, "uid": current_user["user_id"]})
-        delete_chart_snapshots(session_id, current_user["user_id"])
+            conn.execute(text(
+                "DELETE FROM message_store WHERE session_id = :sid AND user_id = :uid"
+            ), {"sid": session_id, "uid": user_id})
+            conn.execute(text(
+                "DELETE FROM agent_summary_store WHERE session_id = :sid AND user_id = :uid"
+            ), {"sid": session_id, "uid": user_id})
+            conn.execute(text(
+                "DELETE FROM chat_session WHERE session_id = :sid AND user_id = :uid"
+            ), {"sid": session_id, "uid": user_id})
+        delete_chart_snapshots(session_id, user_id)
     finally:
         engine.dispose()
     return {"status": "ok", "message": f"会话 {session_id} 已删除"}
