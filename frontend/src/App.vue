@@ -144,8 +144,8 @@ function mergeChartData(currentChart, incomingChart) {
 
   return {
     ...incoming,
-    title: String(metadata.station || metadata.station_full_name || '') + String(rangeStart || '') + ' to ' + String(rangeEnd || '') + ' ' + (granularity === 'hourly' ? 'hourly' : 'daily') + ' power',
-    x_axis: { ...incoming.x_axis, data: labels, label: granularity === 'hourly' ? 'Time' : 'Date' },
+    title: `${metadata.station || metadata.station_full_name || '站点'} ${rangeStart || ''}${rangeEnd && rangeEnd !== rangeStart ? ` 至 ${rangeEnd}` : ''}${granularity === 'hourly' ? '逐小时' : '按日'}发电量`,
+    x_axis: { ...incoming.x_axis, data: labels, label: granularity === 'hourly' ? '时间（时）' : '日期（日）' },
     series,
     metadata,
   }
@@ -546,55 +546,45 @@ function toggleToolDetails(messageId) {
   expandedMessageId.value = expandedMessageId.value === messageId ? null : messageId
 }
 
-function chartModel(chartData) {
-  const normalized = normalizeChartData(chartData)
-  const values = normalized?.series?.flatMap((series) => (series.data || []).map((value) => Number(value) || 0)) || []
-  if (!values.length) return null
-  const max = Math.max(...values, 1)
-  const min = Math.min(...values, 0)
-  const range = max - min || 1
-  const labels = normalized.x_axis.data
-  const seriesModels = normalized.series.map((series, seriesIndex) => {
-    const points = (series.data || []).map((value, index) => {
-      const numericValue = Number(value) || 0
-      const x = labels.length === 1 ? 0 : (index / (labels.length - 1)) * 600
-      const y = 140 - ((numericValue - min) / range) * 100
-      return `${x.toFixed(1)} ${y.toFixed(1)}`
-    })
-    return {
-      name: series.name || 'Series ' + (seriesIndex + 1),
-      color: series.color || 'var(--chart-accent)',
-      line: `M${points.join(' L')}`,
-      area: seriesIndex === 0 ? `M${points[0]} L${points.slice(1).join(' L')} L600 150 L0 150 Z` : '',
-    }
-  })
-  return { labels, series: seriesModels }
+function chartDataTypeLabel(value) {
+  const labels = {
+    actual: '实际数据',
+    predicted: '预测数据',
+    comparison: '预测与实际对比',
+  }
+  return labels[String(value || '').toLowerCase()] || '发电量数据'
 }
 
-function chartLabels(chartData) {
-  const labels = chartModel(chartData)?.labels || []
-  const selected = labels.length <= 3 ? labels : [labels[0], labels[Math.floor(labels.length / 2)], labels[labels.length - 1]]
-  return selected.map((label) => {
-    const value = String(label)
-    if (value.includes(' ')) return value.slice(5)
-    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value.slice(5)
-    return value
-  })
+function chartStationLabel(chartData) {
+  const metadata = chartData?.metadata || {}
+  return metadata.station_full_name || metadata.station || metadata.station_name || '未标注站点'
 }
+
+function chartGranularityLabel(chartData) {
+  const metadata = chartData?.metadata || {}
+  const granularity = String(metadata.granularity || metadata.time_granularity || '').toLowerCase()
+  if (granularity === 'hourly') return '逐小时'
+  if (granularity === 'daily') return '按日汇总'
+
+  const labels = chartData?.x_axis?.data || []
+  return labels.some((label) => /\d{1,2}:\d{2}/.test(String(label))) ? '逐小时' : '按日汇总'
+}
+
 function chartRangeLabel(chartData) {
   const metadata = chartData?.metadata || {}
-  const start = metadata.range_start || metadata.start_date || metadata.date || 'Generated'
+  const start = metadata.range_start || metadata.start_date || metadata.date || '未标注时间'
   const end = metadata.range_end || metadata.end_date
-  return end && end !== start ? String(start) + ' to ' + String(end) : start
+  return end && end !== start ? `${start} 至 ${end}` : String(start)
 }
+
 function resultMetrics(chartData) {
   const metadata = chartData?.metadata || {}
   const total = metadata.predicted_total_kwh ?? metadata.actual_total_kwh ?? '-'
   const peak = metadata.predicted_peak_value_kwh ?? metadata.actual_peak_value_kwh ?? '-'
   return [
-    { label: 'Total generation', value: total, unit: 'kWh' },
-    { label: 'Peak generation', value: peak, unit: 'kWh' },
-    { label: 'Data type', value: metadata.data_type || 'generation', unit: '' },
+    { label: '总发电量', value: total, unit: 'kWh' },
+    { label: '峰值发电量', value: peak, unit: 'kWh' },
+    { label: '数据类型', value: chartDataTypeLabel(metadata.data_type), unit: '' },
   ]
 }
 
@@ -725,7 +715,12 @@ onBeforeUnmount(() => {
                     />
                     <div v-if="message.processSteps && message.processSteps.length && (message.status === 'streaming' || message.status === 'waiting' || message.status === 'stopped' || message.status === 'error')" class="execution-track"><div v-for="step in message.processSteps" :key="step.id" class="execution-item" :class="[step.status, step.type]"><span></span>{{ step.label }}</div></div>
                     <div v-if="message.status === 'complete' && message.chartData" class="prediction-result">
-                      <div class="result-topline"><span>图表结果</span><span>{{ chartRangeLabel(message.chartData) }}</span></div>
+                      <div class="result-topline"><span>发电分析结果</span><span>{{ chartDataTypeLabel(message.chartData.metadata?.data_type) }}</span></div>
+                      <div class="result-context">
+                        <div><span>站点信息</span><strong>{{ chartStationLabel(message.chartData) }}</strong></div>
+                        <div><span>时间跨度</span><strong>{{ chartRangeLabel(message.chartData) }}</strong></div>
+                        <div><span>统计粒度</span><strong>{{ chartGranularityLabel(message.chartData) }}</strong></div>
+                      </div>
                       <div class="metric-row"><div v-for="metric in resultMetrics(message.chartData)" :key="metric.label"><span>{{ metric.label }}</span><strong>{{ metric.value }} <em v-if="metric.unit">{{ metric.unit }}</em></strong></div></div>
                       <PowerChart class="chart-shell" :chart-data="message.chartData" :theme="theme" />
                       <div class="result-actions"><button class="text-button" type="button" @click="toggleToolDetails(message.id)">{{ expandedMessageId === message.id ? '收起执行详情' : '查看执行详情' }} ↗</button><button class="export-button" type="button" @click="showToast('导出功能将在后续版本接入')">导出预测结果</button></div>

@@ -1055,7 +1055,7 @@ def predict_station_power(station_name: str, lat: float, lon: float,
 # ============================================================
 
 def _normalize_confirmation_answer(raw_answer: str) -> str:
-    """清理 AskUserBridge/CLI 返回的确认文本。"""
+    """清理 AskUserBridge 返回的确认文本。"""
     answer = str(raw_answer or "").strip()
     for prefix in ("用户回复:", "用户回复："):
         if answer.startswith(prefix):
@@ -1066,9 +1066,8 @@ def _normalize_confirmation_answer(raw_answer: str) -> str:
 def _request_prediction_confirmation(station_name: str, predict_date: str) -> str:
     """在预测真正执行前，强制请求用户确认标准站点和日期。
 
-    这里复用 ask_user 的底层输入处理器，因此 Web 请求会进入AskUserBridge，
-    CLI 运行仍然使用 input()；但确认逻辑由预测工具自身保证，
-    不再依赖 Agent 是否记得先调用 ask_user。
+    这里复用 ask_user 的底层输入处理器，FastAPI 请求会进入 AskUserBridge。
+    确认逻辑由预测工具自身保证，不依赖 Agent 是否记得先调用 ask_user。
     """
     from backend.tools.ask_user_tool import request_user_input
 
@@ -1160,51 +1159,3 @@ def predict_power(
     )
 
     return summary, pred_df
-    # 自测时把 solar_agent 根目录加入 path，保证 backend.tools 包能被导入
-    # 当前文件路径: solar_agent/backend/tools/pv_predictor.py
-    # 需要往上跳 3 级到 solar_agent/
-    import sys
-    _solar_agent_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-    sys.path.insert(0, _solar_agent_root)
-
-    print("=" * 60)
-    print("pv_predictor.py 模块自测")
-    print("=" * 60)
-
-    # 测试 1: ModelManager 模型加载
-    print("\n--- 测试 1: ModelManager 模型加载 ---")
-    manager = ModelManager()
-    models = manager.get_station_models("英杰", "晴天")
-    print(f"  feat_cols 数量: {len(models['feat_cols'])}")
-    print(f"  scaler: {type(models['scaler']).__name__}")
-    print(f"  xgb: {type(models['xgb']).__name__}")
-    print(f"  lgb: {type(models['lgb']).__name__}")
-    print(f"  lstm: {type(models['lstm']).__name__}")
-    print(f"  lstnet: {type(models['lstnet']).__name__}")
-    print(f"  meta_model: {type(models['meta_model']).__name__}")
-
-    # 测试 2: 缓存命中
-    print("\n--- 测试 2: 缓存命中 ---")
-    models2 = manager.get_station_models("英杰", "晴天")  # 应该命中缓存
-    print(f"  同一对象: {models is models2}")
-
-    # 测试 3: 完整预测流程
-    print("\n--- 测试 3: predict_power 完整流程 ---")
-    result = predict_power.invoke({"station_name": "英杰"})
-    print(f"\n  返回类型: {type(result)}")
-
-    if hasattr(result, "content") and hasattr(result, "artifact"):
-        print(f"\n  === content (LLM 摘要) ===")
-        print(result.content)
-        print(f"\n  === artifact (DataFrame) ===")
-        df = result.artifact
-        print(f"  shape: {df.shape}")
-        print(f"  列: {list(df.columns)}")
-        print(f"  前5行:")
-        print(df.head().to_string(index=False))
-    else:
-        print(f"  结果: {result}")
-
-    print("\n" + "=" * 60)
-    print("自测完成")
-    print("=" * 60)

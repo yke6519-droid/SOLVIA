@@ -1,44 +1,22 @@
-"""
-ask_user_tool.py - 用户交互工具
-================================
-让 LLM 在工具执行链路中间向用户提问并等待回复。
+"""通过 FastAPI 会话桥接器完成 Agent 与用户之间的交互。"""
+from typing import Annotated, Callable, Optional
 
-CLI 阶段: 默认用 input() 阻塞等待用户输入
-FastAPI 阶段: 调用 set_input_handler() 替换为异步回调,工具代码不用改
-
-使用场景:
-  - 站点模糊匹配需要用户选择
-  - 耗时操作前让用户确认
-  - 导出格式/路径等需要用户指定
-"""
-from typing import Annotated, Callable
 from langchain_core.tools import tool
 
 
-# 可注入的输入处理器,默认为内置 input (CLI 阻塞输入)
-_input_handler: Callable[[str], str] = input
+_input_handler: Optional[Callable[[str], str]] = None
 
 
 def set_input_handler(handler: Callable[[str], str]) -> None:
-    """替换输入处理器(供 FastAPI 等非 CLI 环境使用)。
-
-    CLI 环境: 不需要调用,默认用 input() 即可
-    FastAPI 环境: 替换为异步回调机制
-
-    参数:
-        handler: 接收提示语、返回用户输入字符串的函数
-    """
+    """注册由 FastAPI 会话管理器提供的用户输入处理器。"""
     global _input_handler
     _input_handler = handler
 
 
-
 def request_user_input(question: str) -> str:
-    """调用当前运行环境注入的用户输入处理器。
-
-    该函数供非 LangChain 工具代码（例如预测确认门）复用。
-    Web 环境会进入 AskUserBridge，CLI 环境会进入 input()。
-    """
+    """通过当前请求绑定的 AskUserBridge 等待用户回复。"""
+    if _input_handler is None:
+        raise RuntimeError("用户输入处理器尚未初始化，请通过 FastAPI 会话调用该工具")
     return _input_handler(question)
 
 
@@ -61,6 +39,7 @@ def ask_user(
     返回:
         用户的回复内容,带"用户回复:"前缀,便于 LLM 识别
     """
-    print(f"\n🤔 {question}")
     answer = request_user_input(question)
+    if answer.startswith(("用户回复:", "用户回复：")):
+        return answer
     return f"用户回复: {answer}"

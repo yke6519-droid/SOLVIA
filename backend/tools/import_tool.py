@@ -558,7 +558,7 @@ def import_power_data(
     # 2. 入库前调用 ask_user 确认
     from backend.tools.ask_user_tool import ask_user
 
-    # 构造 CLI 预览文本
+    # 构造发送给前端确认卡片的导入预览摘要
     lines = [f"📊 数据导入预览", f"文件: {preview['filename']}", f"检测到 {preview['station_count']} 个站点:", ""]
     for i, s in enumerate(preview['stations']):
         cap_str = f"{s['capacity_kw']:.0f} kW" if s['capacity_kw'] else "未知"
@@ -584,7 +584,7 @@ def import_power_data(
     # 3. 执行入库(复用公共函数)
     result = execute_import(file_path=full_path, filename=filename, skip_clean=skip_clean)
 
-    # 4. 返回 CLI 摘要
+    # 4. 返回结构清晰的导入结果摘要
     summary = [
         f"✅ 导入完成:",
         f"  文件: {result['filename']}",

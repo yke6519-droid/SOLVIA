@@ -245,14 +245,13 @@ VITE_API_BASE_URL=http://127.0.0.1:8001/api
 
 ```powershell
 cd D:\AAA_myProjects\howso\myAgent\solar_agent
-$python = "D:\AAA_myProjects\howso\myAgent\solar_agent\.venv\Scripts\python.exe"
-& $python -m backend.app.main
+uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
 服务启动后可以访问：
 
 - API 文档：`http://127.0.0.1:8001/docs`
-- 内置测试页面：`http://127.0.0.1:8001/`
+- API 服务信息：`http://127.0.0.1:8001/`
 - 流式对话：`POST /api/chat/stream`
 - 普通对话：`POST /api/chat`
 - 注册：`POST /api/auth/register`
@@ -266,13 +265,6 @@ npm run dev
 ```
 
 前端默认访问：`http://localhost:5173`。开发环境下通过 `VITE_API_BASE_URL` 连接 FastAPI；未登录访问工作台会自动跳转到 `/login`。
-
-### 命令行运行 Agent
-
-```powershell
-$python = "D:\AAA_myProjects\howso\myAgent\solar_agent\.venv\Scripts\python.exe"
-& $python -m backend.Agent.run
-```
 
 ## 数据库初始化顺序
 

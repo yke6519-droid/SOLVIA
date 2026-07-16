@@ -8,13 +8,11 @@ backend/
 ├─ Agent/     AgentExecutor、Prompt、Memory、LLM
 ├─ tools/     光伏预测、查询、气象、文件、图表和导入工具
 ├─ sql/       数据库脚本和迁移
-└─ temp/      后端运行时文件
+└─ temp/      文件读写功能的独立测试环境
 ```
 
 从项目根目录启动：
 
 ```powershell
-python -m backend.app.main
-# 或
-uvicorn backend.app.main:app --reload --port 8001
+uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8001
 ```

@@ -72,6 +72,40 @@ function chartTypeOf(data) {
   return ['line', 'bar', 'pie'].includes(data?.chart_type) ? data.chart_type : 'line'
 }
 
+function localizedSeriesName(name, index) {
+  const source = String(name || '').trim()
+  const normalized = source.toLowerCase()
+  if (normalized.includes('actual')) return '实际发电量'
+  if (normalized.includes('predict') || normalized.includes('forecast')) return '预测发电量'
+  if (normalized.includes('comparison') || normalized.includes('compare')) return '预测与实际对比'
+  if (normalized.includes('generation') || normalized.includes('power')) return '发电量'
+  return source || `数据序列 ${index + 1}`
+}
+
+function chartUnit(data) {
+  const explicitUnit = data.y_axis?.unit || data.metadata?.unit || data.series?.[0]?.unit
+  if (explicitUnit) return String(explicitUnit)
+  const label = String(data.y_axis?.label || '')
+  const matched = label.match(/[（(]([^）)]+)[）)]/)
+  if (matched?.[1]) return matched[1]
+  return /generation|power|发电量/i.test(label) ? 'kWh' : ''
+}
+
+function xAxisName(data, labels) {
+  const granularity = String(data.metadata?.granularity || data.metadata?.time_granularity || '').toLowerCase()
+  if (granularity === 'hourly' || labels.some((label) => /\d{1,2}:\d{2}/.test(label))) return '时间（时）'
+  if (granularity === 'daily' || labels.some((label) => /^\d{4}-\d{2}-\d{2}$/.test(label))) return '日期（日）'
+  const label = String(data.x_axis?.label || '').toLowerCase()
+  return label.includes('date') ? '日期（日）' : '时间'
+}
+
+function yAxisName(data, unit) {
+  const rawLabel = String(data.y_axis?.label || '')
+  const normalized = rawLabel.toLowerCase()
+  const base = /generation|power|发电量/.test(normalized) ? '发电量' : (rawLabel.replace(/[（(][^）)]+[）)]/g, '').trim() || '数值')
+  return unit ? `${base}（${unit}）` : base
+}
+
 function buildOption() {
   const data = normalizeChartData(props.chartData)
   if (!data) return null
@@ -79,13 +113,15 @@ function buildOption() {
   const palette = props.theme === 'light' ? lightPalette : darkPalette
   const chartType = chartTypeOf(data)
   const labels = data.x_axis.data.map((item) => String(item))
+  const unit = chartUnit(data)
   const sourceSeries = data.series.map((series, index) => ({
     ...series,
-    name: series.name || `序列 ${index + 1}`,
-    color: series.color && !String(series.color).startsWith('var(') ? series.color : (index === 0 ? (props.theme === 'light' ? '#4b8e83' : '#65e6cf') : '#e6a04b'),
+    name: localizedSeriesName(series.name, index),
+    color: series.color && !String(series.color).startsWith('var(')
+      ? series.color
+      : (index === 0 ? (props.theme === 'light' ? '#4b8e83' : '#65e6cf') : '#e6a04b'),
     data: Array.isArray(series.data) ? series.data : [],
   }))
-  const defaultUnit = data.y_axis?.unit || data.metadata?.unit || ''
 
   if (chartType === 'pie') {
     const firstSeries = sourceSeries[0]
@@ -98,13 +134,9 @@ function buildOption() {
         backgroundColor: palette.tooltipBg,
         borderColor: palette.tooltipBorder,
         textStyle: { color: palette.text },
-        formatter: (params) => `${escapeHtml(params.name)}<br/>${params.marker}${escapeHtml(firstSeries?.name || '数值')}：<strong>${formatValue(params.value)} ${escapeHtml(firstSeries?.unit || defaultUnit)}</strong>`,
+        formatter: (params) => `${escapeHtml(params.name)}<br/>${params.marker}${escapeHtml(firstSeries?.name || '发电量')}：<strong>${formatValue(params.value)} ${escapeHtml(firstSeries?.unit || unit)}</strong>`,
       },
-      legend: {
-        bottom: 0,
-        type: 'scroll',
-        textStyle: { color: palette.muted },
-      },
+      legend: { bottom: 0, type: 'scroll', textStyle: { color: palette.muted } },
       series: [{
         type: 'pie',
         radius: ['42%', '70%'],
@@ -120,10 +152,10 @@ function buildOption() {
     animationDuration: 420,
     color: sourceSeries.map((series) => series.color),
     grid: {
-      left: 42,
-      right: sourceSeries.length > 1 ? 70 : 16,
-      top: sourceSeries.length > 1 ? 34 : 14,
-      bottom: labels.length > 12 ? 42 : 28,
+      left: 52,
+      right: sourceSeries.length > 1 ? 72 : 18,
+      top: sourceSeries.length > 1 ? 38 : 20,
+      bottom: labels.length > 12 ? 52 : 40,
       containLabel: true,
     },
     tooltip: {
@@ -145,8 +177,7 @@ function buildOption() {
           .map((item) => {
             const source = sourceSeries[item.seriesIndex] || {}
             const rawValue = Array.isArray(item.value) ? item.value[item.value.length - 1] : item.value
-            const unit = source.unit || defaultUnit
-            return `${item.marker}${escapeHtml(item.seriesName)}：<strong>${formatValue(rawValue)} ${escapeHtml(unit)}</strong>`
+            return `${item.marker}${escapeHtml(item.seriesName)}：<strong>${formatValue(rawValue)} ${escapeHtml(source.unit || unit)}</strong>`
           })
         return `<div style="font-weight:600;margin-bottom:5px">${escapeHtml(axisLabel)}</div>${rows.join('<br/>')}`
       },
@@ -160,20 +191,20 @@ function buildOption() {
     xAxis: {
       type: 'category',
       data: labels,
+      name: xAxisName(data, labels),
+      nameLocation: 'middle',
+      nameGap: 28,
+      nameTextStyle: { color: palette.muted, fontSize: 11 },
       boundaryGap: chartType === 'bar',
       axisLine: { lineStyle: { color: palette.border } },
       axisTick: { show: false },
-      axisLabel: {
-        color: palette.muted,
-        hideOverlap: true,
-        formatter: shortenAxisLabel,
-      },
+      axisLabel: { color: palette.muted, hideOverlap: true, formatter: shortenAxisLabel },
       splitLine: { show: false },
     },
     yAxis: {
       type: 'value',
-      name: data.y_axis?.label || '',
-      nameTextStyle: { color: palette.muted, padding: [0, 0, 0, 12] },
+      name: yAxisName(data, unit),
+      nameTextStyle: { color: palette.muted, padding: [0, 0, 0, 10], fontSize: 11 },
       axisLabel: { color: palette.muted },
       axisLine: { show: false },
       axisTick: { show: false },

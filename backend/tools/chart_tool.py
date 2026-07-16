@@ -1,7 +1,7 @@
 """
 chart_tool.py - 发电量可视化数据工具 (LangChain Tool)
 ======================================================
-提供发电量图表的结构化数据,供前端 ECharts 渲染或 CLI 下 LLM 呈现。
+提供发电量图表的结构化数据,供 Vue 前端使用 ECharts 渲染。
 
 工具列表(@tool,暴露给 LLM):
   1. get_power_chart_data  获取发电量图表数据(返回结构化 JSON)
@@ -11,7 +11,6 @@ chart_tool.py - 发电量可视化数据工具 (LangChain Tool)
   - 不生成文件、不画图,只返回结构化 JSON 字符串
   - JSON 结构兼容 ECharts: title / x_axis / series / metadata
   - 前端可直接 setOption() 渲染交互式折线图
-  - CLI 环境下 LLM 可根据返回数据用表格/文字呈现
 """
 import json
 import math
@@ -169,8 +168,6 @@ def get_power_chart_data(
 
     支持场景:用户想看发电量折线图、可视化图表时调用。
     返回前端 ECharts 可直接消费的 JSON 结构(title/x_axis/series/metadata)。
-    CLI 环境下可根据返回数据用表格或文字呈现关键信息。
-
     返回:
         JSON 字符串,包含图表标题、X轴时段、Y轴数据系列、统计元数据
     """

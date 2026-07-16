@@ -224,9 +224,14 @@ button { border: 0; cursor: pointer; }
 .execution-item.active { color: var(--text-main); }
 .execution-item.active span { background: var(--warning); box-shadow: 0 0 10px var(--warning); animation: pulse 1.3s infinite; }
 .result-card { color: var(--task-ink); border: 1px solid var(--task-border); background: var(--task-bg); box-shadow: 0 8px 22px color-mix(in srgb, var(--task-ink) 10%, transparent); }
-.prediction-result { margin-top: 19px; }
-.result-topline { display: flex; justify-content: space-between; color: var(--task-muted); font-family: 'Space Mono', monospace; font-size: 11px; text-transform: uppercase; }
-.metric-row { display: grid; grid-template-columns: 1.5fr 1.3fr 1fr; gap: 14px; margin: 18px 0; }
+.prediction-result { margin-top: 16px; }
+.result-topline { display: flex; align-items: center; justify-content: space-between; color: var(--task-muted); font-size: 13px; font-weight: 650; letter-spacing: .02em; }
+.result-topline span:last-child { padding: 4px 8px; color: var(--task-ink); border: 1px solid var(--task-border); border-radius: 999px; background: color-mix(in srgb, var(--task-ink) 5%, transparent); font-size: 11px; font-weight: 600; }
+.result-context { display: grid; grid-template-columns: 1.3fr 1.5fr .8fr; gap: 10px 16px; margin-top: 13px; padding: 11px 0 13px; border-bottom: 1px solid var(--task-border); }
+.result-context div { display: flex; flex-direction: column; min-width: 0; gap: 5px; }
+.result-context span { color: var(--task-muted); font-size: 11px; }
+.result-context strong { overflow: hidden; color: var(--task-ink); font-size: 13px; font-weight: 600; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.metric-row { display: grid; grid-template-columns: 1.5fr 1.3fr 1fr; gap: 14px; margin: 15px 0; }
 .metric-row div { display: flex; flex-direction: column; gap: 7px; }
 .metric-row span { color: var(--task-muted); font-size: 12px; }
 .metric-row strong { color: var(--task-ink); font-size: 22px; font-weight: 500; letter-spacing: -.04em; }
@@ -488,8 +493,8 @@ button { border: 0; cursor: pointer; }
 .chart-legend i { width: 8px; height: 8px; display: inline-block; border-radius: 50%; }
 
 /* ECharts 图表容器 */
-.chart-shell.power-chart { height: 220px; min-height: 220px; width: 100%; box-sizing: border-box; padding: 10px 4px 8px; }
-.power-chart { min-height: 190px; }
+.chart-shell.power-chart { height: 250px; min-height: 250px; width: 100%; box-sizing: border-box; padding: 10px 4px 8px; }
+.power-chart { min-height: 220px; }
 
 /* 对话密度微调 */
 .message-card:not(.result-card) { padding: 13px 15px; }

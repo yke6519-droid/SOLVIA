@@ -11,6 +11,7 @@ from backend.app.schemas.chat import ChatRequest, ReplyRequest
 from backend.app.services.agent_manager import agent_manager
 from backend.app.routers.sessions import _verify_session_ownership, ensure_session_title
 from backend.app.services.chart_snapshot_store import save_chart_snapshot
+from backend.app.services.summary_task_manager import summary_task_manager
 
 router = APIRouter(prefix="/api", tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -84,6 +85,7 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
         bridge.attach(queue, asyncio.get_running_loop())
         # 累积最终完整文本结果
         full_output = ""
+        stream_completed = False
         # 收集工具生成的图表数据
         chart_specs = []
 
@@ -131,6 +133,7 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
                 while True:
                     kind, data = await queue.get()
                     if kind == "done":
+                        stream_completed = True
                         # 如果是完成事件，发送最终输出并结束 SSE
                         yield {
                             "event": "done",
@@ -149,7 +152,8 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
                 if not task.done():
                     task.cancel()
                 try:
-                    await executor.memory.amaybe_summarize()
+                    if stream_completed:
+                        summary_task_manager.schedule(req.session_id, executor.memory)
                 except Exception:
                     logger.exception("摘要生成失败")
     # 返回一个 SSE 响应，ping 每 15 秒发送一次心跳
@@ -171,7 +175,7 @@ async def chat(req: ChatRequest, current_user: dict = Depends(get_current_user))
     executor = agent_manager.get_agent(req.session_id, user_id=user_id)
     async with lock:
         result = await asyncio.to_thread(executor.invoke, {"input": req.message})
-    asyncio.create_task(executor.memory.amaybe_summarize())
+    summary_task_manager.schedule(req.session_id, executor.memory)
     return {"output": result.get("output", str(result)) if isinstance(result, dict) else str(result)}
 
 

@@ -136,7 +136,7 @@ class PersistentWindowSummaryMemory(BaseChatMemory, SummarizerMixin):
     def maybe_summarize(self):
         """
         同步摘要: 对话结束后调用, 检查并生成摘要。
-        供 CLI (run.py) 和 FastAPI BackgroundTasks 使用。
+        供 FastAPI 对话任务和后台摘要任务复用。
 
         触发条件: 消息数 > 2*k + summarize_threshold
         失败不影响主流程。
