@@ -271,18 +271,22 @@ npm run dev
 
 前端默认访问：`http://localhost:5173`。开发环境下通过 `VITE_API_BASE_URL` 连接 FastAPI；未登录访问工作台会自动跳转到 `/login`。
 
-## 数据库初始化顺序
+## 数据库初始化与迁移
 
-首次部署时，根据数据库类型执行对应脚本：
+当前项目的 DDL 面向 MySQL 8.0+。首次部署空数据库时，执行基础结构脚本：
 
 1. `backend/sql/init_schema.sql`
 2. `backend/sql/cache_schema.sql`
 3. `backend/sql/memory_schema.sql`
-4. `backend/sql/migrations/001_phase1_memory_schema.sql`
-5. `backend/sql/migrations/002_prediction_weather_data_mode.sql`
-6. `backend/sql/migrations/003_chart_snapshot_store.sql`
 
-生产环境建议使用迁移脚本管理数据库结构，不要直接删除业务表。
+已有数据库不要重新执行带有 `DROP TABLE` 的基础脚本，应根据数据库当前结构按顺序执行迁移：
+
+1. `backend/sql/migrations/001_phase1_memory_schema.sql`：对话消息和摘要表兼容升级。
+2. `backend/sql/migrations/002_prediction_weather_data_mode.sql`：预测缓存增加气象数据模式，区分历史实况回测和未来预报。
+3. `backend/sql/migrations/003_chart_snapshot_store.sql`：增加历史 ECharts 图表快照表。
+4. `backend/sql/migrations/004_chat_session.sql`：增加会话元数据和会话名称表。
+
+当前 `memory_schema.sql` 已包含会话元数据和图表快照的完整结构，因此新空库不需要重复执行 `003`、`004`；这两个迁移文件用于旧数据库升级。迁移脚本不会删除业务数据，执行前仍建议备份数据库。
 
 ## 测试与验证
 

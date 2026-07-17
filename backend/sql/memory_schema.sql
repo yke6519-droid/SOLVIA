@@ -19,15 +19,15 @@ CREATE TABLE IF NOT EXISTS message_store (
     message     TEXT NOT NULL,
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_session_created (session_id, created_at),
-    INDEX idx_user_session_created (user_id, session_id, created_at)
+    INDEX idx_message_store_user_id (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS agent_summary_store (
     session_id  VARCHAR(255) NOT NULL,
-    user_id     BIGINT NOT NULL,
+    user_id     BIGINT NULL,
     summary     TEXT NOT NULL,
     updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (session_id, user_id),
+    PRIMARY KEY (session_id),
     INDEX idx_summary_user (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
