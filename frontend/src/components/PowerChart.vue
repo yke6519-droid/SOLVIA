@@ -1,5 +1,5 @@
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import * as echarts from 'echarts/core'
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import { BarChart, LineChart, PieChart } from 'echarts/charts'
@@ -15,6 +15,19 @@ const props = defineProps({
 const chartElement = ref(null)
 const chartInstance = shallowRef(null)
 let resizeObserver = null
+
+const yAxisLabel = computed(() => {
+  const data = normalizeChartData(props.chartData)
+  if (!data || chartTypeOf(data) === 'pie') return ''
+  return yAxisName(data, chartUnit(data))
+})
+
+const xAxisLabel = computed(() => {
+  const data = normalizeChartData(props.chartData)
+  if (!data || chartTypeOf(data) === 'pie') return ''
+  const labels = data.x_axis.data.map((item) => String(item))
+  return xAxisName(data, labels)
+})
 
 const darkPalette = {
   text: '#edf6f2',
@@ -32,6 +45,13 @@ const lightPalette = {
   grid: 'rgba(43, 57, 51, .10)',
   tooltipBg: '#fbfaf6',
   tooltipBorder: 'rgba(75, 142, 131, .36)',
+}
+
+// 柱状图颜色由前端按“数据序列”统一控制，而不是按 dataIndex 给每根柱子循环取色。
+// 第一阶段最多展示四个序列；两套色板分别适配浅色和深色背景。
+const barPalettes = {
+  light: ['#2F7D72', '#C9783D', '#4D78A8', '#B59632'],
+  dark: ['#62C8B5', '#E7A061', '#79A9E8', '#E8CA68'],
 }
 
 function normalizeChartData(value) {
@@ -114,12 +134,16 @@ function buildOption() {
   const chartType = chartTypeOf(data)
   const labels = data.x_axis.data.map((item) => String(item))
   const unit = chartUnit(data)
+  const barPalette = props.theme === 'light' ? barPalettes.light : barPalettes.dark
   const sourceSeries = data.series.map((series, index) => ({
     ...series,
     name: localizedSeriesName(series.name, index),
-    color: series.color && !String(series.color).startsWith('var(')
+    // 柱状图不采信后端颜色策略，按前端序列顺序固定颜色；折线图继续兼容后端颜色。
+    color: chartType === 'bar'
+      ? barPalette[index % barPalette.length]
+      : (series.color && !String(series.color).startsWith('var(')
       ? series.color
-      : (index === 0 ? (props.theme === 'light' ? '#4b8e83' : '#65e6cf') : '#e6a04b'),
+      : (index === 0 ? (props.theme === 'light' ? '#4b8e83' : '#65e6cf') : '#e6a04b')),
     data: Array.isArray(series.data) ? series.data : [],
   }))
 
@@ -154,8 +178,9 @@ function buildOption() {
     grid: {
       left: 52,
       right: sourceSeries.length > 1 ? 72 : 18,
-      top: sourceSeries.length > 1 ? 38 : 20,
-      bottom: labels.length > 12 ? 52 : 40,
+      // 纵轴单位标题由容器内的独立标签呈现，绘图区向下留出标题空间。
+      top: sourceSeries.length > 1 ? 48 : 46,
+      bottom: labels.length > 12 ? 34 : 30,
       containLabel: true,
     },
     tooltip: {
@@ -191,10 +216,6 @@ function buildOption() {
     xAxis: {
       type: 'category',
       data: labels,
-      name: xAxisName(data, labels),
-      nameLocation: 'middle',
-      nameGap: 28,
-      nameTextStyle: { color: palette.muted, fontSize: 11 },
       boundaryGap: chartType === 'bar',
       axisLine: { lineStyle: { color: palette.border } },
       axisTick: { show: false },
@@ -203,8 +224,6 @@ function buildOption() {
     },
     yAxis: {
       type: 'value',
-      name: yAxisName(data, unit),
-      nameTextStyle: { color: palette.muted, padding: [0, 0, 0, 10], fontSize: 11 },
       axisLabel: { color: palette.muted },
       axisLine: { show: false },
       axisTick: { show: false },
@@ -222,6 +241,8 @@ function buildOption() {
       areaStyle: chartType === 'line' && index === 0 ? { opacity: 0.12 } : undefined,
       emphasis: { focus: 'series' },
       barMaxWidth: chartType === 'bar' ? 28 : undefined,
+      // 一个 series 对应一个固定颜色，避免同一序列的柱子出现彩虹式跳色。
+      itemStyle: chartType === 'bar' ? { color: series.color } : undefined,
     })),
   }
 }
@@ -261,5 +282,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="chartElement" class="power-chart" aria-label="发电量图表"></div>
+  <div class="power-chart-frame" aria-label="发电量图表">
+    <span v-if="yAxisLabel" class="power-chart-y-label" aria-hidden="true">{{ yAxisLabel }}</span>
+    <div ref="chartElement" class="power-chart-canvas"></div>
+    <span v-if="xAxisLabel" class="power-chart-x-label" aria-hidden="true">{{ xAxisLabel }}</span>
+  </div>
 </template>

@@ -137,9 +137,11 @@ button { border: 0; cursor: pointer; }
 .new-session:hover { background: var(--accent-hover); transform: translateY(-2px); }
 .plus { font-size: 21px; font-weight: 300; line-height: 12px; }
 .session-list { display: flex; flex-direction: column; gap: 3px; }
-.session-item, .result-link { width: 100%; display: flex; align-items: center; gap: 10px; padding: 11px 9px; color: var(--text-muted); text-align: left; border-radius: 6px; background: transparent; transition: background-color .22s ease, color .22s ease; }
+.session-item, .result-link { width: 100%; display: flex; align-items: center; gap: 10px; padding: 11px 9px; color: var(--text-muted); text-align: left; border-radius: 6px; background: transparent; transition: background-color .22s ease, border-color .22s ease, color .22s ease; }
+.session-item { border: 1px solid color-mix(in srgb, var(--border-subtle) 78%, transparent); }
 .session-item:hover, .result-link:hover { color: var(--text-main); background: var(--surface-hover); }
-.session-item.active { color: var(--text-main); background: var(--surface-active); }
+.session-item:hover { border-color: color-mix(in srgb, var(--border-strong) 72%, transparent); }
+.session-item.active { color: var(--text-main); border-color: color-mix(in srgb, var(--accent) 32%, var(--border-subtle)); background: var(--surface-active); }
 .session-signal { width: 6px; height: 6px; border-radius: 1px; background: #5e6e6a; transform: rotate(45deg); }
 .active .session-signal { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
 .session-copy { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
@@ -493,8 +495,10 @@ button { border: 0; cursor: pointer; }
 .chart-legend i { width: 8px; height: 8px; display: inline-block; border-radius: 50%; }
 
 /* ECharts 图表容器 */
-.chart-shell.power-chart { height: 250px; min-height: 250px; width: 100%; box-sizing: border-box; padding: 10px 4px 8px; }
-.power-chart { min-height: 220px; }
+.chart-shell.power-chart-frame { position: relative; height: 250px; min-height: 250px; width: 100%; box-sizing: border-box; padding: 10px 4px 8px; }
+.power-chart-canvas { width: 100%; height: 100%; min-height: 0; }
+.power-chart-y-label { position: absolute; top: 4px; left: 52px; z-index: 3; color: var(--task-muted); font-size: 11px; line-height: 1.2; white-space: nowrap; pointer-events: none; }
+.power-chart-x-label { position: absolute; right: 18px; bottom: 5px; left: 52px; z-index: 3; color: var(--task-muted); font-size: 11px; line-height: 1.2; text-align: center; white-space: nowrap; pointer-events: none; }
 
 /* 对话密度微调 */
 .message-card:not(.result-card) { padding: 13px 15px; }

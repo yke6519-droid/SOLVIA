@@ -35,6 +35,7 @@ const activeView = ref('conversation')
 const toast = ref('')
 const theme = ref(window.localStorage.getItem('solar-agent-theme') || 'dark')
 const messageList = ref(null)
+const composerInput = ref(null)
 const abortController = ref(null)
 const isLoginRoute = computed(() => route.path === '/login')
 const activeSession = computed(() => sessions.value.find((session) => session.id === activeSessionId.value) || null)
@@ -254,19 +255,18 @@ async function selectSession(session) {
   }
 }
 
-async function createSession() {
-  if (isStreaming.value) return
-  try {
-    const data = await createSessionApi()
-    const session = mapSession({ session_id: data.session_id, title: data.title })
-    sessions.value = [session, ...sessions.value.map((item) => ({ ...item, active: false }))]
-    markActiveSession(session.id)
-    messages.value = []
-    activeView.value = 'conversation'
-    showToast('Operation failed')
-  } catch (error) {
-    showToast('Operation failed')
-  }
+function createSession() {
+  if (isStreaming.value || pendingQuestion.value) return
+  historyRequestId += 1
+  activeSessionId.value = ''
+  sessions.value.forEach((session) => { session.active = false })
+  messages.value = []
+  isLoadingMessages.value = false
+  input.value = ''
+  pendingQuestion.value = null
+  expandedMessageId.value = null
+  activeView.value = 'conversation'
+  router.replace('/workspace')
 }
 
 async function renameSession(session) {
@@ -319,7 +319,7 @@ async function ensureActiveSession() {
 
 function useShortcut(text) {
   input.value = text
-  nextTick(sendMessage)
+  nextTick(() => composerInput.value?.focus())
 }
 
 function findMessage(messageId) {
@@ -446,6 +446,22 @@ async function sendMessage() {
             resultType: data?.result_type || 'text',
           })
           const chartData = normalizeChartData(data?.chart_data)
+          if (chartData) {
+            assistantMessage.charts.push(chartData)
+            assistantMessage.chartData = mergeChartData(assistantMessage.chartData, chartData)
+          }
+        } else if (eventName === 'chart_spec') {
+          const toolName = data?.name || 'create_chart_plan'
+          const toolStep = [...(assistantMessage.processSteps || [])].reverse().find((step) => step.type === 'tool' && step.status === 'active' && step.label.includes(toolName))
+          if (toolStep) toolStep.status = 'done'
+          addProcessStep(assistantMessage, '图表已生成', 'chart', 'done')
+          assistantMessage.toolEvents.push({
+            type: 'end',
+            name: toolName,
+            result: data?.result || '图表已生成',
+            resultType: 'chart_spec',
+          })
+          const chartData = normalizeChartData(data?.chart_spec)
           if (chartData) {
             assistantMessage.charts.push(chartData)
             assistantMessage.chartData = mergeChartData(assistantMessage.chartData, chartData)
@@ -660,7 +676,7 @@ onBeforeUnmount(() => {
       <div class="workspace">
         <aside class="sidebar">
           <div class="sidebar-heading"><span>会话</span><span class="session-count">{{ sessions.length }}</span></div>
-          <button class="new-session" type="button" @click="createSession"><span class="plus">+</span><span>新建会话</span></button>
+          <button class="new-session" type="button" @click="createSession"><span class="plus"></span><span>回到首页</span></button>
           <div class="session-list">
             <div v-if="isLoadingSessions" class="session-empty">正在加载会话…</div>
             <div v-else-if="sessions.length === 0" class="session-empty">还没有会话</div>
@@ -733,7 +749,7 @@ onBeforeUnmount(() => {
           </section>
 
           <div class="composer-wrap">
-            <div class="composer"><button class="composer-add" type="button" aria-label="添加文件" @click="showToast('文件导入将在后续版本接入')">+</button><input v-model="input" type="text" placeholder="告诉我你想完成的光伏任务" :disabled="isStreaming || Boolean(pendingQuestion)" @keydown.enter="sendMessage" /><button v-if="isStreaming" class="stop-button" type="button" @click="stopStreaming">停止</button><button v-else class="send-button" type="button" aria-label="发送消息" @click="sendMessage">↗</button></div>
+            <div class="composer"><button class="composer-add" type="button" aria-label="添加文件" @click="showToast('文件导入将在后续版本接入')">+</button><input ref="composerInput" v-model="input" type="text" placeholder="告诉我你想完成的光伏任务" :disabled="isStreaming || Boolean(pendingQuestion)" @keydown.enter="sendMessage" /><button v-if="isStreaming" class="stop-button" type="button" @click="stopStreaming">停止</button><button v-else class="send-button" type="button" aria-label="发送消息" @click="sendMessage">↗</button></div>
             <div class="composer-foot"><span>SolarAgent 可能需要你确认关键业务条件</span><span>Enter 发送</span></div>
           </div>
         </main>

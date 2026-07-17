@@ -16,6 +16,8 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
+# 启动脚本
+# python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8001
 
 def _configure_proxy_environment() -> None:
     """避免本地服务和指定云服务错误经过系统代理。"""
