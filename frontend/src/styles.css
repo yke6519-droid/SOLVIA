@@ -267,6 +267,17 @@ button { border: 0; cursor: pointer; }
 .composer-foot { max-width: 1040px; display: flex; justify-content: space-between; margin: 7px auto 0; color: var(--text-faint); font-family: 'Space Mono', monospace; font-size: 10px; }
 .toast { position: fixed; right: 26px; bottom: 26px; z-index: 10; padding: 11px 16px; color: var(--ink-on-accent); border-radius: 5px; background: var(--accent); box-shadow: 0 12px 35px var(--shadow); font-size: 14px; animation: toast-in .3s ease-out; }
 
+.auth-expired-backdrop { position: fixed; inset: 0; z-index: 40; display: grid; place-items: center; padding: 24px; background: rgba(4, 9, 13, .66); backdrop-filter: blur(8px); }
+.auth-expired-dialog { width: min(100%, 390px); padding: 30px 30px 26px; color: var(--text-main); border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface-input); box-shadow: 0 24px 70px rgba(0, 0, 0, .28); text-align: center; animation: auth-dialog-in .22s ease-out; }
+.auth-expired-icon { display: grid; place-items: center; width: 38px; height: 38px; margin: 0 auto 17px; color: var(--warning); border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent); border-radius: 50%; background: color-mix(in srgb, var(--warning) 13%, transparent); font-size: 22px; font-weight: 700; }
+.auth-expired-kicker { margin: 0 0 8px; color: var(--accent); font-size: 12px; letter-spacing: .08em; }
+.auth-expired-dialog h2 { margin: 0; color: var(--text-main); font-size: 24px; font-weight: 650; }
+.auth-expired-message { margin: 12px 0 23px; color: var(--text-muted); font-size: 14px; line-height: 1.7; }
+.auth-expired-confirm { width: 100%; padding: 11px 16px; color: var(--ink-on-accent); border-radius: 6px; background: var(--accent); font-size: 14px; font-weight: 650; transition: transform .2s ease, background-color .2s ease; }
+.auth-expired-confirm:hover { transform: translateY(-1px); background: var(--accent-hover); }
+
+@keyframes auth-dialog-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 

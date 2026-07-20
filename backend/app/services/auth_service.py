@@ -16,7 +16,7 @@ def _secret_key() -> str:
 
 def create_access_token(user: Dict[str, Any]) -> tuple[str, int]:
     """创建短时 Access Token。"""
-    expires_in = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_SECONDS", "3600"))
+    expires_in = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_SECONDS", "10"))
     now = datetime.now(timezone.utc)
     # 封装令牌内的数据
     payload = {

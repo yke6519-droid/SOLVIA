@@ -3,7 +3,8 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
+from langchain_core.tools import ToolException
 from sse_starlette.sse import EventSourceResponse
 
 from backend.app.dependencies.auth import get_current_user
@@ -13,9 +14,46 @@ from backend.app.routers.sessions import _verify_session_ownership, ensure_sessi
 from backend.app.services.chart_snapshot_store import save_chart_snapshot
 from backend.app.services.summary_task_manager import summary_task_manager
 from backend.app.charting.context import bind_chart_context, reset_chart_context
+from backend.app.errors import AppError, ErrorCode, ToolError
 
 router = APIRouter(prefix="/api", tags=["chat"])
 logger = logging.getLogger(__name__)
+
+
+def _agent_error_event(exc: Exception) -> dict:
+    """Convert an Agent/tool exception into the stable SSE error payload."""
+    if isinstance(exc, ToolError):
+        return {
+            "code": exc.code,
+            "message": exc.message,
+            "status": 422,
+            "retryable": exc.retryable,
+            "details": exc.details,
+        }
+    if isinstance(exc, ToolException):
+        return {
+            "code": "CHAT_AGENT_FAILED",
+            "message": str(exc) or "任务执行失败",
+            "status": 422,
+            "retryable": False,
+            "details": {},
+        }
+    if isinstance(exc, asyncio.TimeoutError):
+        return {
+            "code": ErrorCode.CHAT_AGENT_TIMEOUT.value,
+            "message": "任务执行超时，请稍后重试",
+            "status": 504,
+            "retryable": True,
+            "details": {},
+        }
+    logger.exception("Agent execution failed")
+    return {
+        "code": ErrorCode.CHAT_AGENT_FAILED.value,
+        "message": "任务执行失败，请稍后重试",
+        "status": 500,
+        "retryable": True,
+        "details": {},
+    }
 
 
 def _parse_structured_tool_output(raw_output):
@@ -58,6 +96,8 @@ def _process_agent_event(ev: dict):
             return "tool_end", {
                 "name": name,
                 "result_type": "chart_error",
+                "code": result.get("error", {}).get("code") if isinstance(result, dict) else "CHART_PLAN_INVALID",
+                "error": result.get("error") if isinstance(result, dict) else None,
                 "result": output_str[:800] + ("..." if len(output_str) > 800 else ""),
             }
         if name in {"get_power_chart_data", "get_power_chart_data_by_range"}:
@@ -86,7 +126,7 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
 
     lock = agent_manager.get_lock(req.session_id)
     if lock.locked():
-        raise HTTPException(409, detail="当前会话正在处理请求")
+        raise AppError(ErrorCode.SESSION_BUSY, "当前会话正在处理请求", status_code=409, retryable=True)
 
     # 首条用户消息到达时创建/补齐会话名称；手动重命名不会被覆盖。
     ensure_session_title(req.session_id, user_id, req.message)
@@ -140,8 +180,7 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.exception("Agent 执行出错")
-                await queue.put(("error", {"message": str(exc)}))
+                await queue.put(("error", _agent_error_event(exc)))
             finally:
                 # 解绑 ContextVar，避免泄漏
                 agent_manager.reset_bridge(bridge_token)
@@ -190,7 +229,7 @@ async def chat(req: ChatRequest, current_user: dict = Depends(get_current_user))
     _verify_session_ownership(req.session_id, user_id)
     lock = agent_manager.get_lock(req.session_id)
     if lock.locked():
-        raise HTTPException(409, detail="当前会话正在处理请求")
+        raise AppError(ErrorCode.SESSION_BUSY, "当前会话正在处理请求", status_code=409, retryable=True)
 
     # 首条用户消息到达时创建/补齐会话名称；手动重命名不会被覆盖。
     ensure_session_title(req.session_id, user_id, req.message)
@@ -216,8 +255,8 @@ async def reply_to_question(
     _verify_session_ownership(session_id, current_user["user_id"])
     bridge = agent_manager.get_bridge(session_id)
     if bridge is None or not bridge.is_active:
-        raise HTTPException(404, detail="会话不存在")
+        raise AppError(ErrorCode.CHAT_REPLY_NOT_WAITING, "当前会话没有等待回复的问题", status_code=409)
     if not bridge.is_waiting:
-        raise HTTPException(400, detail="当前没有等待回复的问题")
+        raise AppError(ErrorCode.CHAT_REPLY_NOT_WAITING, "当前没有等待回复的问题", status_code=409)
     bridge.reply(req.answer)
     return {"status": "ok", "message": "回复已发送"}

@@ -8,6 +8,8 @@ import pymysql
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError, VerificationError
 
+from backend.app.errors import AppError, ErrorCode
+
 logger = logging.getLogger(__name__)
 _PASSWORD_HASHER = PasswordHasher()
 
@@ -16,16 +18,29 @@ def _get_conn():
     """从环境变量获取 MySQL 连接。"""
     url = os.getenv("MYSQL_URL")
     if not url:
-        raise RuntimeError("MYSQL_URL 未配置")
+        raise AppError(
+            ErrorCode.DB_UNAVAILABLE,
+            "数据库连接配置缺失",
+            status_code=503,
+            retryable=False,
+        )
     parsed = urlparse(url)
-    return pymysql.connect(
-        host=parsed.hostname,
-        port=parsed.port or 3306,
-        user=parsed.username,
-        password=parsed.password,
-        database=parsed.path.lstrip("/"),
-        charset="utf8mb4",
-    )
+    try:
+        return pymysql.connect(
+            host=parsed.hostname,
+            port=parsed.port or 3306,
+            user=parsed.username,
+            password=parsed.password,
+            database=parsed.path.lstrip("/"),
+            charset="utf8mb4",
+        )
+    except pymysql.MySQLError as exc:
+        raise AppError(
+            ErrorCode.DB_UNAVAILABLE,
+            "数据库暂时不可用，请稍后重试",
+            status_code=503,
+            retryable=True,
+        ) from exc
 
 
 def _hash_password(password: str) -> str:
@@ -50,7 +65,12 @@ def register_user(username: str, password: str, display_name: str = "") -> dict:
         with conn.cursor() as cur:
             cur.execute("SELECT id FROM user_info WHERE username=%s", (username,))
             if cur.fetchone():
-                raise ValueError(f"用户名 '{username}' 已存在")
+                raise AppError(
+                    ErrorCode.USER_ALREADY_EXISTS,
+                    "用户名已存在",
+                    status_code=409,
+                    details={"field": "username"},
+                )
             cur.execute(
                 "INSERT INTO user_info (username, password_hash, display_name) VALUES (%s, %s, %s)",
                 (username, _hash_password(password), display_name or username),
@@ -79,12 +99,24 @@ def login_user(username: str, password: str) -> dict:
             )
             row = cur.fetchone()
             if not row:
-                raise ValueError("用户名或密码错误")
+                raise AppError(
+                    ErrorCode.AUTH_LOGIN_FAILED,
+                    "用户名或密码错误",
+                    status_code=401,
+                )
             user_id, db_username, stored_hash, role, display_name, status = row
             if status == 0:
-                raise RuntimeError("该账号已被禁用，请联系管理员")
+                raise AppError(
+                    ErrorCode.AUTH_ACCOUNT_DISABLED,
+                    "该账号已被禁用，请联系管理员",
+                    status_code=403,
+                )
             if not _verify_password(password, stored_hash):
-                raise ValueError("用户名或密码错误")
+                raise AppError(
+                    ErrorCode.AUTH_LOGIN_FAILED,
+                    "用户名或密码错误",
+                    status_code=401,
+                )
             logger.info("用户登录成功: id=%s, username=%s", user_id, db_username)
             return {
                 "user_id": user_id,

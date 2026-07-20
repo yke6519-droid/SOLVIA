@@ -41,6 +41,7 @@ const pendingQuestion = ref(null)
 const expandedMessageId = ref(null)
 const activeView = ref('conversation')
 const toast = ref('')
+const authExpiredModalVisible = ref(false)
 const theme = ref(window.localStorage.getItem('solar-agent-theme') || 'dark')
 const messageList = ref(null)
 const composerInput = ref(null)
@@ -51,6 +52,7 @@ const conversationTitle = computed(() => activeSession.value?.title || '新会�
 const statusLabel = computed(() => (pendingQuestion.value ? 'Waiting for reply' : isStreaming.value ? 'Processing' : 'Online'))
 const displayName = computed(() => currentUser.value?.display_name || currentUser.value?.username || 'User')
 let toastTimer = null
+let authExpiryTimer = null
 let historyRequestId = 0
 
 function updateThemeMeta(nextTheme) {
@@ -69,6 +71,30 @@ function showToast(text) {
   toast.value = text
   if (toastTimer) window.clearTimeout(toastTimer)
   toastTimer = window.setTimeout(() => { toast.value = '' }, 2400)
+}
+
+function errorMessage(error, fallback = '操作失败，请稍后重试') {
+  const messages = {
+    AUTH_REQUIRED: '登录已失效，请重新登录',
+    AUTH_TOKEN_EXPIRED: '登录已过期，请重新登录',
+    AUTH_TOKEN_INVALID: '登录凭证无效，请重新登录',
+    SESSION_BUSY: '当前会话正在处理请求，请稍后再试',
+    SESSION_NOT_FOUND: '会话不存在或已被删除',
+    SESSION_FORBIDDEN: '你没有权限访问这个会话',
+    DATA_NOT_FOUND: '没有找到符合条件的数据',
+    DATA_SOURCE_UNSUPPORTED: '当前数据来源不受支持',
+    DATA_SOURCE_COMBINATION_UNSUPPORTED: '当前数据来源组合暂不支持',
+    DATA_RANGE_INVALID: '查询日期范围无效',
+    DATA_POINT_LIMIT_EXCEEDED: '图表数据量过大，请缩短时间范围或减少站点',
+    DATA_SERIES_LIMIT_EXCEEDED: '图表序列数量超出当前能力范围',
+    STATION_NOT_FOUND: '没有找到对应的站点',
+    CAPABILITY_NOT_ENABLED: '当前图表能力暂未启用',
+    CHART_PLAN_INVALID: '图表生成计划不符合当前能力范围',
+    DB_UNAVAILABLE: '数据服务暂时不可用，请稍后重试',
+    SERVICE_UNAVAILABLE: '服务暂时不可用，请稍后重试',
+    UPSTREAM_TIMEOUT: '外部服务响应超时，请稍后重试',
+  }
+  return messages[error?.code] || error?.message || fallback
 }
 
 function formatTime(value) {
@@ -245,7 +271,7 @@ async function loadSessions({ append = false } = {}) {
       messages.value = []
     }
   } catch (error) {
-    showToast('Operation failed')
+    showToast(errorMessage(error, '会话列表加载失败'))
   } finally {
     if (append) isLoadingMoreSessions.value = false
     else isLoadingSessions.value = false
@@ -254,7 +280,7 @@ async function loadSessions({ append = false } = {}) {
 
 async function selectSession(session) {
   if (isStreaming.value) {
-    showToast('Operation failed')
+    showToast('当前会话正在处理请求，请稍后再试')
     return
   }
   markActiveSession(session.id)
@@ -277,7 +303,7 @@ async function selectSession(session) {
   } catch (error) {
     if (requestId !== historyRequestId || activeSessionId.value !== session.id) return
     messages.value = []
-    showToast('Operation failed')
+    showToast(errorMessage(error, '历史消息加载失败'))
   } finally {
     if (requestId === historyRequestId) isLoadingMessages.value = false
   }
@@ -304,7 +330,7 @@ async function loadOlderMessages() {
     await nextTick()
     if (list) list.scrollTop = list.scrollHeight - previousHeight + previousTop
   } catch (error) {
-    if (requestId === historyRequestId && activeSessionId.value === sessionId) showToast('历史消息加载失败')
+    if (requestId === historyRequestId && activeSessionId.value === sessionId) showToast(errorMessage(error, '历史消息加载失败'))
   } finally {
     isLoadingOlderMessages.value = false
   }
@@ -342,13 +368,13 @@ async function renameSession(session) {
     session.titleFromServer = true
     showToast('会话已重命名')
   } catch (error) {
-    showToast(error?.message || '会话重命名失败')
+    showToast(errorMessage(error, '会话重命名失败'))
   }
 }
 
 async function removeSession(session) {
   if (isStreaming.value) {
-    showToast('Operation failed')
+    showToast('当前会话正在处理请求，请稍后再试')
     return
   }
   if (!window.confirm('Delete session ' + session.title + '?')) return
@@ -360,9 +386,9 @@ async function removeSession(session) {
       activeSessionId.value = ''
       messages.value = []
     }
-    showToast('Operation failed')
+    showToast('会话已删除')
   } catch (error) {
-    showToast('Operation failed')
+    showToast(errorMessage(error, '会话删除失败'))
   }
 }
 
@@ -441,7 +467,7 @@ async function sendMessage() {
     sessionId = await ensureActiveSession()
     maybeAssignSessionTitleFromFirstMessage(sessionId, content)
   } catch (error) {
-    showToast('Operation failed')
+    showToast(errorMessage(error, '新建会话失败'))
     return
   }
 
@@ -503,6 +529,8 @@ async function sendMessage() {
             name: toolName,
             result: data?.result || '',
             resultType: data?.result_type || 'text',
+            code: data?.code || '',
+            details: data?.error?.details || data?.details || {},
           })
           const chartData = normalizeChartData(data?.chart_data)
           if (chartData) {
@@ -542,7 +570,8 @@ async function sendMessage() {
           completeActiveProcessStep(assistantMessage, 'error')
           addProcessStep(assistantMessage, '\u4efb\u52a1\u6267\u884c\u5931\u8d25', 'error', 'error')
           assistantMessage.status = 'error'
-          assistantMessage.content = data?.message || '任务执行失败'
+          assistantMessage.errorCode = data?.code || 'CHAT_AGENT_FAILED'
+          assistantMessage.content = errorMessage(data, '任务执行失败')
         } else if (eventName === 'done') {
           if (!assistantMessage.content && data?.output) assistantMessage.content = data.output
           if (!streamFailed) {
@@ -562,12 +591,18 @@ async function sendMessage() {
       addProcessStep(assistantMessage, '\u4efb\u52a1\u5df2\u505c\u6b62', 'stopped', 'done')
       assistantMessage.status = 'stopped'
       assistantMessage.content = assistantMessage.content || 'Task stopped.'
+    } else if (error?.status === 401) {
+      // 401 已由 API 层触发登录失效弹窗，这里不再覆盖成普通流式错误。
+      completeActiveProcessStep(assistantMessage, 'error')
+      assistantMessage.status = 'error'
+      assistantMessage.content = '登录已过期，请重新登录后继续。'
     } else {
       completeActiveProcessStep(assistantMessage, 'error')
       addProcessStep(assistantMessage, '\u6d41\u5f0f\u8fde\u63a5\u5931\u8d25', 'error', 'error')
       assistantMessage.status = 'error'
-      assistantMessage.content = error.message || 'Stream failed'
-      showToast(error.message || 'Stream failed')
+      assistantMessage.errorCode = error?.code || 'CHAT_STREAM_INTERRUPTED'
+      assistantMessage.content = errorMessage(error, '流式连接失败，请稍后重试')
+      showToast(errorMessage(error, '流式连接失败，请稍后重试'))
     }
   } finally {
     if (abortController.value === runController) abortController.value = null
@@ -599,7 +634,7 @@ async function submitQuestionReply(answerValue = pendingQuestion.value?.answer) 
     showToast('已收到回复，任务继续执行')
   } catch (error) {
     question.status = 'waiting'
-    question.error = error?.message || '回复发送失败，请重试'
+    question.error = errorMessage(error, '回复发送失败，请重试')
     showToast(question.error)
   } finally {
     isReplying.value = false
@@ -665,6 +700,7 @@ function resultMetrics(chartData) {
 
 function handleAuthenticated(user) {
   currentUser.value = user
+  scheduleAuthExpiryCheck()
   showToast('欢迎回来，' + (user.display_name || user.username))
   loadSessions()
 }
@@ -675,8 +711,25 @@ function handleAuthExpired() {
   activeSessionId.value = ''
   sessions.value = []
   messages.value = []
-  if (!isLoginRoute.value) router.replace('/login')
-  showToast('Operation failed')
+  if (!isLoginRoute.value) authExpiredModalVisible.value = true
+}
+
+function scheduleAuthExpiryCheck() {
+  if (authExpiryTimer) window.clearTimeout(authExpiryTimer)
+  authExpiryTimer = null
+
+  const auth = getStoredAuth()
+  if (!auth?.expires_at) return
+  const delay = Math.max(0, auth.expires_at - Date.now()) + 100
+  authExpiryTimer = window.setTimeout(() => {
+    authExpiryTimer = null
+    if (!getStoredAuth() && !isLoginRoute.value) handleAuthExpired()
+  }, delay)
+}
+
+function goToLoginAfterAuthExpired() {
+  authExpiredModalVisible.value = false
+  router.replace('/login')
 }
 
 function logout() {
@@ -687,7 +740,7 @@ function logout() {
   messages.value = []
   activeSessionId.value = ''
   router.replace('/login')
-  showToast('Operation failed')
+  showToast('已退出登录')
 }
 
 function scrollToBottom() {
@@ -698,13 +751,17 @@ function scrollToBottom() {
 
 onMounted(() => {
   window.addEventListener('solar-agent-auth-expired', handleAuthExpired)
-  if (currentUser.value && !isLoginRoute.value) loadSessions()
+  if (currentUser.value && !isLoginRoute.value) {
+    scheduleAuthExpiryCheck()
+    loadSessions()
+  }
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('solar-agent-auth-expired', handleAuthExpired)
   if (abortController.value) abortController.value.abort()
   if (toastTimer) window.clearTimeout(toastTimer)
+  if (authExpiryTimer) window.clearTimeout(authExpiryTimer)
 })
 </script>
 
@@ -819,5 +876,14 @@ onBeforeUnmount(() => {
       </div>
     </template>
     <div v-if="toast" class="toast">{{ toast }}</div>
+    <div v-if="authExpiredModalVisible" class="auth-expired-backdrop" role="presentation">
+      <section class="auth-expired-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-expired-title">
+        <div class="auth-expired-icon" aria-hidden="true">!</div>
+        <p class="auth-expired-kicker">登录状态</p>
+        <h2 id="auth-expired-title">登录已过期</h2>
+        <p class="auth-expired-message">为了保护你的账号和会话数据，请重新登录后继续使用。</p>
+        <button class="auth-expired-confirm" type="button" @click="goToLoginAfterAuthExpired">重新登录</button>
+      </section>
+    </div>
   </div>
 </template>

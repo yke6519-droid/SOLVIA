@@ -8,11 +8,12 @@ auth.py - 认证路由
   - 暂不做 JWT Token，前后端分离时加
 """
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
 from backend.app.schemas.user import RegisterRequest, LoginRequest, UserResponse, AuthResponse
 from backend.app.services.auth_service import create_access_token
 from backend.app.services.user_service import register_user, login_user
+from backend.app.errors import AppError, ErrorCode
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -30,8 +31,12 @@ async def register(req: RegisterRequest):
             display_name=user["display_name"],
             message="注册成功",
         )
-    except ValueError as e:
-        raise HTTPException(400, detail=str(e))
+    except ValueError as exc:
+        raise AppError(
+            ErrorCode.REQUEST_VALIDATION_FAILED,
+            str(exc),
+            status_code=422,
+        ) from exc
 
 
 @router.post("/login", response_model=AuthResponse)
@@ -53,7 +58,11 @@ async def login(req: LoginRequest):
                 message="登录成功",
             ),
         )
-    except ValueError as e:
-        raise HTTPException(401, detail=str(e))
-    except RuntimeError as e:
-        raise HTTPException(403, detail=str(e))
+    except ValueError as exc:
+        raise AppError(ErrorCode.AUTH_LOGIN_FAILED, str(exc), status_code=401) from exc
+    except RuntimeError as exc:
+        raise AppError(
+            ErrorCode.AUTH_CONFIG_ERROR,
+            "认证服务配置错误",
+            status_code=500,
+        ) from exc

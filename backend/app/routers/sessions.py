@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
 
 from backend.app.dependencies.auth import get_current_user
@@ -13,6 +13,7 @@ from backend.app.services.agent_manager import agent_manager
 from backend.app.services.chart_snapshot_store import delete_chart_snapshots, load_chart_snapshots
 from backend.app.database import get_engine
 from backend.app.config import HISTORY_PAGE_SIZE, SESSION_PAGE_SIZE
+from backend.app.errors import AppError, ErrorCode
 
 router = APIRouter(prefix="/api", tags=["sessions"])
 logger = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ def _decode_session_cursor(cursor: str) -> tuple[str, str]:
             raise ValueError
         return last_message_at, session_id
     except (ValueError, KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
-        raise HTTPException(status_code=400, detail="无效的会话分页游标")
+        raise AppError(ErrorCode.SESSION_CURSOR_INVALID, "无效的会话分页游标", status_code=400)
 
 
 def _extract_user_content(raw_message: str) -> str:
@@ -143,11 +144,11 @@ def _verify_session_ownership(session_id: str, user_id: int) -> None:
                     "SELECT user_id FROM agent_summary_store WHERE session_id = :sid LIMIT 1"
                 ), {"sid": session_id}).fetchone()
             if row is None:
-                raise HTTPException(404, detail=f"会话 {session_id} 不存在")
+                raise AppError(ErrorCode.SESSION_NOT_FOUND, "会话不存在", status_code=404)
             if row[0] is None:
-                raise HTTPException(404, detail="会话缺少有效所有者信息")
+                raise AppError(ErrorCode.SESSION_NOT_FOUND, "会话缺少有效所有者信息", status_code=404)
             if int(row[0]) != user_id:
-                raise HTTPException(403, detail="无权操作此会话")
+                raise AppError(ErrorCode.SESSION_FORBIDDEN, "无权操作此会话", status_code=403)
     finally:
         pass
 
@@ -328,7 +329,7 @@ async def rename_session(
     _verify_session_ownership(session_id, user_id)
     title = build_session_title(req.title)
     if title == DEFAULT_SESSION_TITLE and not str(req.title or "").strip():
-        raise HTTPException(422, detail="会话名称不能为空")
+        raise AppError(ErrorCode.SESSION_TITLE_INVALID, "会话名称不能为空", status_code=422)
 
     engine = _get_engine()
     try:

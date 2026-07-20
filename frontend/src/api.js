@@ -6,10 +6,14 @@ const USER_KEY = 'solar-agent-user'
 const EXPIRES_KEY = 'solar-agent-token-expires-at'
 
 export class ApiError extends Error {
-  constructor(message, status = 0) {
+  constructor(message, status = 0, options = {}) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.code = options.code || 'UNKNOWN_ERROR'
+    this.retryable = Boolean(options.retryable)
+    this.details = options.details || {}
+    this.requestId = options.requestId || ''
   }
 }
 
@@ -50,32 +54,46 @@ function handleAuthExpired() {
 function normalizeAxiosError(error, fallback = '请求失败，请稍后重试') {
   if (error instanceof ApiError) return error
   if (error.response) {
-    const detail = error.response.data?.detail || error.response.data?.message || fallback
-    return new ApiError(detail, error.response.status)
+    const payload = error.response.data || {}
+    const structured = payload.error || payload
+    const detail = structured.message || payload.detail || payload.message || fallback
+    return new ApiError(detail, error.response.status, {
+      code: structured.code,
+      retryable: structured.retryable,
+      details: structured.details,
+      requestId: structured.request_id || error.response.headers?.['x-request-id'],
+    })
   }
   if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
-    return new ApiError('后端响应超时，请稍后重试', 0)
+    return new ApiError('后端响应超时，请稍后重试', 0, { code: 'UPSTREAM_TIMEOUT', retryable: true })
   }
-  return new ApiError('暂时无法连接后端服务，请确认 FastAPI 已启动在 8001 端口', 0)
+  return new ApiError('暂时无法连接后端服务，请确认 FastAPI 已启动在 8001 端口', 0, { code: 'SERVICE_UNAVAILABLE', retryable: true })
 }
 
 async function parseResponseError(response, fallback) {
   let detail = fallback
+  let errorInfo = {}
   try {
     const payload = await response.json()
-    detail = payload?.detail || payload?.message || detail
+    errorInfo = payload?.error || payload || {}
+    detail = errorInfo.message || payload?.detail || payload?.message || detail
   } catch {
     // 非 JSON 错误响应使用默认提示
   }
   if (response.status === 401) handleAuthExpired()
-  return new ApiError(detail, response.status)
+  return new ApiError(detail, response.status, {
+    code: errorInfo.code,
+    retryable: errorInfo.retryable,
+    details: errorInfo.details,
+    requestId: errorInfo.request_id || response.headers.get('x-request-id'),
+  })
 }
 
 export async function login(credentials) {
   try {
     const { data } = await publicClient.post('/auth/login', credentials)
     if (!data?.access_token || !data?.user) {
-      throw new ApiError('登录响应缺少必要的凭证信息')
+      throw new ApiError('登录响应缺少必要的凭证信息', 502, { code: 'AUTH_RESPONSE_INVALID' })
     }
     return data
   } catch (error) {
@@ -85,11 +103,11 @@ export async function login(credentials) {
 
 export function saveAuth(auth) {
   if (!auth?.access_token || !auth?.user) {
-    throw new ApiError('无法保存无效的登录凭证')
+    throw new ApiError('无法保存无效的登录凭证', 0, { code: 'AUTH_RESPONSE_INVALID' })
   }
   const expiresIn = Number(auth.expires_in || 3600)
   if (!Number.isFinite(expiresIn) || expiresIn <= 0) {
-    throw new ApiError('登录响应中的凭证有效期无效')
+    throw new ApiError('登录响应中的凭证有效期无效', 0, { code: 'AUTH_RESPONSE_INVALID' })
   }
   const expiresAt = Date.now() + expiresIn * 1000
   window.localStorage.setItem(TOKEN_KEY, auth.access_token)
@@ -130,7 +148,10 @@ export function getAccessToken() {
 }
 
 export async function apiFetch(path, options = {}) {
-  if (!getAccessToken()) throw new ApiError('登录状态已失效，请重新登录', 401)
+  if (!getAccessToken()) {
+    handleAuthExpired()
+    throw new ApiError('登录状态已失效，请重新登录', 401, { code: 'AUTH_REQUIRED' })
+  }
 
   const method = (options.method || 'GET').toLowerCase()
   let data = options.body
@@ -198,7 +219,10 @@ export async function replyToQuestion(sessionId, answer) {
  * 普通接口统一走 Axios；流式接口使用 Fetch 是为了直接消费 ReadableStream。
  */
 export async function streamChat({ sessionId, message, signal, onEvent }) {
-  if (!getAccessToken()) throw new ApiError('登录状态已失效，请重新登录', 401)
+  if (!getAccessToken()) {
+    handleAuthExpired()
+    throw new ApiError('登录状态已失效，请重新登录', 401, { code: 'AUTH_REQUIRED' })
+  }
 
   let response
   try {

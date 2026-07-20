@@ -5,7 +5,7 @@ from datetime import date
 from typing import Annotated
 from uuid import uuid4
 
-from langchain_core.tools import ToolException, tool
+from langchain_core.tools import tool
 from pydantic import Field
 
 from backend.app.charting.artifact_store import artifact_store
@@ -25,6 +25,7 @@ from backend.app.charting.errors import ChartValidationError
 from backend.app.charting.registry import get_capability, get_enabled_capabilities
 from backend.app.charting.schemas import ChartPlan, FieldDefinition, SeriesBinding
 from backend.app.charting.service import chart_service
+from backend.app.errors import ToolError
 
 
 SOURCE_LABELS = {"actual": "实际发电量", "predicted": "预测发电量"}
@@ -165,7 +166,7 @@ def _station_targets(station_name: str | None, station_names: list[str] | None) 
         values.insert(0, station_name)
     values = [str(value).strip() for value in values if str(value).strip()]
     if not values:
-        raise ToolException("至少提供一个站点名称")
+        raise ToolError("STATION_REQUIRED", "至少提供一个站点名称")
     return list(dict.fromkeys(values))
 
 
@@ -187,11 +188,11 @@ def _validate_range_shape(
 
     period_days = (date.fromisoformat(period_end) - date.fromisoformat(period_start)).days + 1
     if period_days <= 0:
-        raise ToolException("日期范围必须至少包含一天")
+        raise ToolError("DATA_RANGE_INVALID", "日期范围必须至少包含一天")
 
     if granularity == "hourly":
         if station_count > 1 and source_count > 1:
-            raise ToolException("第一阶段暂不支持多站点同时展开实际和预测序列")
+            raise ToolError("DATA_SOURCE_COMBINATION_UNSUPPORTED", "第一阶段暂不支持多站点同时展开实际和预测序列")
         capability_id = (
             "time_series_trend"
             if station_count == 1 and source_count == 1
@@ -201,30 +202,33 @@ def _validate_range_shape(
         series_count = max(station_count, source_count)
     elif granularity == "daily_total":
         if source_count > 1:
-            raise ToolException("周期汇总第一阶段只支持一种数据来源")
+            raise ToolError("DATA_SOURCE_COMBINATION_UNSUPPORTED", "周期汇总第一阶段只支持一种数据来源")
         capability_id = "period_aggregate"
         points_per_series = period_days
         series_count = station_count
     else:
-        raise ToolException("不支持的日期范围数据粒度")
+        raise ToolError("DATA_GRANULARITY_UNSUPPORTED", "不支持的日期范围数据粒度")
 
     capability = get_capability(capability_id)
     if capability is None:
-        raise ToolException(f"当前未启用图表能力: {capability_id}")
+        raise ToolError("CAPABILITY_NOT_ENABLED", f"当前未启用图表能力: {capability_id}")
     if series_count < capability.min_series or series_count > capability.max_series:
-        raise ToolException(
+        raise ToolError(
+            "DATA_SERIES_LIMIT_EXCEEDED",
             f"序列数量 {series_count} 超出 {capability_id} 的允许范围 "
             f"{capability.min_series}~{capability.max_series}"
         )
     if points_per_series > capability.max_points_per_series:
-        raise ToolException(
+        raise ToolError(
+            "DATA_POINT_LIMIT_EXCEEDED",
             f"日期范围展开后每条序列有 {points_per_series} 个点，"
             f"超过 {capability_id} 的上限 {capability.max_points_per_series}；"
             "请缩短日期范围"
         )
     total_points = points_per_series * series_count
     if total_points > capability.max_total_points:
-        raise ToolException(
+        raise ToolError(
+            "DATA_POINT_LIMIT_EXCEEDED",
             f"日期范围展开后共有 {total_points} 个点，"
             f"超过 {capability_id} 的总点数上限 {capability.max_total_points}；"
             "请缩短日期范围或减少站点/序列"
@@ -264,19 +268,19 @@ def get_power_dataset(
         # 解析并验证数据来源类型，默认使用实际发电量
         requested_sources = normalize_source_types(source_types)
     except DatasetSourceError as exc:
-        raise ToolException(str(exc)) from exc
+        raise ToolError("DATA_SOURCE_UNSUPPORTED", str(exc)) from exc
 
     if granularity not in {"hourly", "daily_total"}:
-        raise ToolException("不支持的数据粒度。可选值：hourly、daily_total")
+        raise ToolError("DATA_GRANULARITY_UNSUPPORTED", "不支持的数据粒度。可选值：hourly、daily_total")
     is_range_request = bool(start_date or end_date)
     range_shape = None
     if is_range_request:
         if not start_date or not end_date:
-            raise ToolException("周期汇总必须同时提供 start_date 和 end_date")
+            raise ToolError("DATA_RANGE_INVALID", "周期汇总必须同时提供 start_date 和 end_date")
         period_start = parse_flexible_date(start_date)
         period_end = parse_flexible_date(end_date)
         if period_start > period_end:
-            raise ToolException("start_date 不能晚于 end_date")
+            raise ToolError("DATA_RANGE_INVALID", "start_date 不能晚于 end_date")
         range_shape = _validate_range_shape(
             station_count=len(targets),
             source_count=len(requested_sources),
@@ -286,7 +290,7 @@ def get_power_dataset(
         )
     else:
         if not target_date:
-            raise ToolException("必须提供 target_date，或同时提供 start_date 和 end_date")
+            raise ToolError("DATA_RANGE_INVALID", "必须提供 target_date，或同时提供 start_date 和 end_date")
         period_start = period_end = parse_flexible_date(target_date)
 
     is_daily = granularity == "daily_total"
@@ -309,7 +313,7 @@ def get_power_dataset(
                 else:
                     frame = load_power_source(source_type, station_id, period_start)
             except DatasetSourceError as exc:
-                raise ToolException(str(exc)) from exc
+                raise ToolError("DATA_NOT_FOUND", str(exc)) from exc
 
             source_labels[source_type] = SOURCE_LABELS.get(source_type, source_type)
             for _, value in frame.iterrows():
@@ -327,7 +331,7 @@ def get_power_dataset(
                 })
 
     if not rows:
-        raise ToolException(f"{period_start} 至 {period_end} 未找到可用于绘图的发电数据")
+        raise ToolError("DATA_NOT_FOUND", f"{period_start} 至 {period_end} 未找到可用于绘图的发电数据")
 
     single_station = len(targets) == 1
     series_dimension = "source_type" if single_station and len(requested_sources) > 1 else (

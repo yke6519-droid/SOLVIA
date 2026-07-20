@@ -3,12 +3,21 @@ import logging
 import os
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.config import settings
 from backend.app.routers import auth, chat, sessions
 from backend.app.services.summary_task_manager import summary_task_manager
 from backend.app.database import dispose_engine
+from backend.app.errors import (
+    AppError,
+    app_error_handler,
+    http_error_handler,
+    internal_error_handler,
+    validation_error_handler,
+)
 
 
 logging.basicConfig(
@@ -48,6 +57,10 @@ def create_app() -> FastAPI:
         description="面向光伏运营场景的智能分析与对话 API",
         version="1.0.0",
     )
+    app.add_exception_handler(AppError, app_error_handler)
+    app.add_exception_handler(HTTPException, http_error_handler)
+    app.add_exception_handler(RequestValidationError, validation_error_handler)
+    app.add_exception_handler(Exception, internal_error_handler)
 
     origins = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
     app.add_middleware(
