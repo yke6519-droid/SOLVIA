@@ -16,7 +16,7 @@ import {
   streamChat,
 } from './api'
 import { useRoute, useRouter } from './router'
-import { HISTORY_PAGE_SIZE } from './config'
+import { HISTORY_PAGE_SIZE, SESSION_PAGE_SIZE } from './config'
 
 const router = useRouter()
 const route = useRoute()
@@ -28,6 +28,10 @@ const messages = ref([])
 const input = ref('')
 const isStreaming = ref(false)
 const isLoadingSessions = ref(false)
+const isLoadingMoreSessions = ref(false)
+const hasMoreSessions = ref(false)
+const nextSessionCursor = ref(null)
+const sessionTotal = ref(0)
 const isLoadingMessages = ref(false)
 const isLoadingOlderMessages = ref(false)
 const hasOlderMessages = ref(false)
@@ -216,19 +220,35 @@ function markActiveSession(sessionId) {
   sessions.value.forEach((session) => { session.active = session.id === sessionId })
 }
 
-async function loadSessions() {
+async function loadSessions({ append = false } = {}) {
   if (!currentUser.value) return
-  isLoadingSessions.value = true
-  historyRequestId += 1
+  if (append) {
+    if (isLoadingMoreSessions.value || !hasMoreSessions.value || !nextSessionCursor.value) return
+    isLoadingMoreSessions.value = true
+  } else {
+    isLoadingSessions.value = true
+    nextSessionCursor.value = null
+  }
+  if (!append) historyRequestId += 1
   try {
-    const data = await listSessions()
-    sessions.value = (data.sessions || []).map(mapSession)
-    // Keep historical chart snapshots available for later restoration improvements.
-    messages.value = []
+    const data = await listSessions({
+      limit: SESSION_PAGE_SIZE,
+      before: append ? nextSessionCursor.value : null,
+    })
+    const page = (data.sessions || []).map(mapSession)
+    sessions.value = append ? [...sessions.value, ...page] : page
+    sessionTotal.value = Number(data.total || sessions.value.length)
+    hasMoreSessions.value = Boolean(data.has_more)
+    nextSessionCursor.value = data.next_cursor || null
+    if (!append) {
+      // Keep historical chart snapshots available for later restoration improvements.
+      messages.value = []
+    }
   } catch (error) {
     showToast('Operation failed')
   } finally {
-    isLoadingSessions.value = false
+    if (append) isLoadingMoreSessions.value = false
+    else isLoadingSessions.value = false
   }
 }
 
@@ -335,6 +355,7 @@ async function removeSession(session) {
   try {
     await deleteSessionApi(session.id)
     sessions.value = sessions.value.filter((item) => item.id !== session.id)
+    sessionTotal.value = Math.max(0, sessionTotal.value - 1)
     if (activeSessionId.value === session.id) {
       activeSessionId.value = ''
       messages.value = []
@@ -350,6 +371,7 @@ async function ensureActiveSession() {
   const data = await createSessionApi()
   const session = mapSession({ session_id: data.session_id, title: data.title })
   sessions.value = [session, ...sessions.value]
+  sessionTotal.value += 1
   markActiveSession(session.id)
   return session.id
 }
@@ -712,7 +734,7 @@ onBeforeUnmount(() => {
 
       <div class="workspace">
         <aside class="sidebar">
-          <div class="sidebar-heading"><span>会话</span><span class="session-count">{{ sessions.length }}</span></div>
+          <div class="sidebar-heading"><span>会话</span><span class="session-count">{{ sessionTotal || sessions.length }}</span></div>
           <button class="new-session" type="button" @click="createSession"><span class="plus"></span><span>回到首页</span></button>
           <div class="session-list">
             <div v-if="isLoadingSessions" class="session-empty">正在加载会话…</div>
@@ -721,6 +743,9 @@ onBeforeUnmount(() => {
               <span class="session-signal"></span>
               <span class="session-copy"><span class="session-title">{{ session.title }}</span><span class="session-time">{{ session.time }}</span></span>
               <span class="session-actions"><span class="session-rename" role="button" tabindex="0" title="重命名会话" @click.stop="renameSession(session)" @keydown.enter.stop="renameSession(session)">✎</span><span class="session-more" title="删除会话" @click.stop="removeSession(session)">···</span></span>
+            </button>
+            <button v-if="!isLoadingSessions && hasMoreSessions" class="load-more-sessions" type="button" :disabled="isLoadingMoreSessions" @click="loadSessions({ append: true })">
+              {{ isLoadingMoreSessions ? '正在加载…' : '加载更多会话' }}
             </button>
           </div>
           <div class="sidebar-section-title">最近结果</div>

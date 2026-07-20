@@ -1,4 +1,5 @@
 """会话管理路由与会话元数据服务。"""
+import base64
 import json
 import logging
 from typing import Optional
@@ -11,7 +12,7 @@ from backend.app.schemas.chat import SessionResponse, SessionRenameRequest
 from backend.app.services.agent_manager import agent_manager
 from backend.app.services.chart_snapshot_store import delete_chart_snapshots, load_chart_snapshots
 from backend.app.database import get_engine
-from backend.app.config import HISTORY_PAGE_SIZE
+from backend.app.config import HISTORY_PAGE_SIZE, SESSION_PAGE_SIZE
 
 router = APIRouter(prefix="/api", tags=["sessions"])
 logger = logging.getLogger(__name__)
@@ -30,6 +31,30 @@ def build_session_title(message: str) -> str:
     normalized = " ".join(str(message or "").split())
     title = "".join(list(normalized)[:MAX_SESSION_TITLE_LENGTH])
     return title or DEFAULT_SESSION_TITLE
+
+
+def _encode_session_cursor(last_message_at, session_id: str) -> str:
+    """Encode the last row of a page as an opaque keyset cursor."""
+    payload = json.dumps(
+        {"last_message_at": str(last_message_at), "session_id": session_id},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_session_cursor(cursor: str) -> tuple[str, str]:
+    """Decode and validate a session-list keyset cursor."""
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+        last_message_at = str(payload["last_message_at"])
+        session_id = str(payload["session_id"])
+        if not last_message_at or not session_id:
+            raise ValueError
+        return last_message_at, session_id
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="无效的会话分页游标")
 
 
 def _extract_user_content(raw_message: str) -> str:
@@ -135,54 +160,63 @@ async def create_session(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/sessions")
-async def list_sessions(current_user: dict = Depends(get_current_user)):
-    """列出当前用户的会话及其独立元数据。"""
+async def list_sessions(
+    limit: int = Query(SESSION_PAGE_SIZE, ge=1, le=100),
+    before: Optional[str] = Query(None),
+    current_user: dict = Depends(get_current_user),
+):
+    """按最后消息时间倒序返回当前用户的一页会话。"""
     user_id = current_user["user_id"]
+    params = {"uid": user_id, "limit_plus_one": limit + 1}
+    cursor_clause = ""
+    if before:
+        before_time, before_session_id = _decode_session_cursor(before)
+        params.update({
+            "before_time": before_time,
+            "before_session_id": before_session_id,
+        })
+        cursor_clause = (
+            " AND (last_message_at < :before_time "
+            "OR (last_message_at = :before_time "
+            "AND session_id < :before_session_id))"
+        )
+
     engine = _get_engine()
-    try:
-        with engine.connect() as conn:
-            metadata_rows = conn.execute(text(
-                "SELECT session_id, title, last_message_at, updated_at "
-                "FROM chat_session WHERE user_id = :uid"
-            ), {"uid": user_id}).fetchall()
-            message_rows = conn.execute(text(
-                "SELECT session_id, MAX(created_at) AS last_message_at "
-                "FROM message_store WHERE user_id = :uid "
-                "GROUP BY session_id"
-            ), {"uid": user_id}).fetchall()
-    finally:
-        pass
-    sessions = {
-        row[0]: {
+    with engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT session_id, title, last_message_at, updated_at "
+            "FROM chat_session "
+            "WHERE user_id = :uid"
+            f"{cursor_clause} "
+            "ORDER BY last_message_at DESC, session_id DESC "
+            "LIMIT :limit_plus_one"
+        ), params).fetchall()
+        total = conn.execute(text(
+            "SELECT COUNT(*) FROM chat_session WHERE user_id = :uid"
+        ), {"uid": user_id}).scalar() or 0
+
+    has_more = len(rows) > limit
+    page_rows = rows[:limit]
+    sessions = [
+        {
             "session_id": row[0],
             "title": row[1] or DEFAULT_SESSION_TITLE,
             "last_message_at": str(row[2] or row[3]) if (row[2] or row[3]) else None,
         }
-        for row in metadata_rows
-    }
-    for row in message_rows:
-        sessions.setdefault(row[0], {
-            "session_id": row[0],
-            "title": DEFAULT_SESSION_TITLE,
-            "last_message_at": str(row[1]) if row[1] else None,
-        })
-        if row[1]:
-            sessions[row[0]]["last_message_at"] = str(row[1])
-
-    for sid, executor in agent_manager._agents.items():
-        if getattr(executor.memory, "user_id", None) == user_id:
-            sessions.setdefault(sid, {
-                "session_id": sid,
-                "title": DEFAULT_SESSION_TITLE,
-                "last_message_at": None,
-            })
+        for row in page_rows
+    ]
+    next_cursor = None
+    if has_more and page_rows:
+        last_row = page_rows[-1]
+        last_time = last_row[2] or last_row[3]
+        if last_time:
+            next_cursor = _encode_session_cursor(last_time, last_row[0])
 
     return {
-        "sessions": sorted(
-            sessions.values(),
-            key=lambda item: item.get("last_message_at") or "",
-            reverse=True,
-        )
+        "sessions": sessions,
+        "total": int(total),
+        "has_more": has_more,
+        "next_cursor": next_cursor,
     }
 
 

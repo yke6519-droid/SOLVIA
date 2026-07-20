@@ -155,8 +155,12 @@ export async function apiFetch(path, options = {}) {
   }
 }
 
-export async function listSessions() {
-  return apiFetch('/sessions')
+export async function listSessions(options = {}) {
+  const params = new URLSearchParams()
+  if (options.limit) params.set('limit', String(options.limit))
+  if (options.before) params.set('before', String(options.before))
+  const query = params.toString()
+  return apiFetch(`/sessions${query ? `?${query}` : ''}`)
 }
 
 export async function createSession() {

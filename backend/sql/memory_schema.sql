@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS chat_session (
     updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     last_message_at DATETIME     NULL,
     PRIMARY KEY (session_id),
-    KEY idx_chat_session_user_updated (user_id, updated_at)
+    KEY idx_chat_session_user_updated (user_id, updated_at),
+    KEY idx_chat_session_user_last_message (user_id, last_message_at, session_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='会话元数据';
 CREATE TABLE IF NOT EXISTS message_store (
     id          INT AUTO_INCREMENT PRIMARY KEY,

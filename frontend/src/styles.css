@@ -142,6 +142,9 @@ button { border: 0; cursor: pointer; }
 .session-item:hover, .result-link:hover { color: var(--text-main); background: var(--surface-hover); }
 .session-item:hover { border-color: color-mix(in srgb, var(--border-strong) 72%, transparent); }
 .session-item.active { color: var(--text-main); border-color: color-mix(in srgb, var(--accent) 32%, var(--border-subtle)); background: var(--surface-active); }
+.load-more-sessions { width: 100%; padding: 9px; color: var(--text-muted); font-size: 12px; border: 1px solid var(--border-subtle); border-radius: 6px; background: transparent; cursor: pointer; }
+.load-more-sessions:hover:not(:disabled) { color: var(--text-main); border-color: var(--border-strong); background: var(--surface-hover); }
+.load-more-sessions:disabled { opacity: .6; cursor: wait; }
 .session-signal { width: 6px; height: 6px; border-radius: 1px; background: #5e6e6a; transform: rotate(45deg); }
 .active .session-signal { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
 .session-copy { min-width: 0; display: flex; flex-direction: column; gap: 4px; }

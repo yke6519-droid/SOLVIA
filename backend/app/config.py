@@ -14,17 +14,18 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def _load_history_page_size() -> int:
-    """读取前后端共用的历史消息分页大小。"""
+def _load_pagination_config() -> dict:
+    """读取前后端共用的分页配置。"""
     config_path = Path(__file__).resolve().parents[2] / "shared" / "pagination.json"
     try:
-        value = int(json.loads(config_path.read_text(encoding="utf-8"))["history_page_size"])
-        return max(1, min(value, 200))
+        return json.loads(config_path.read_text(encoding="utf-8"))
     except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError):
-        return 4
+        return {}
 
 
-HISTORY_PAGE_SIZE = _load_history_page_size()
+_PAGINATION_CONFIG = _load_pagination_config()
+HISTORY_PAGE_SIZE = max(1, min(int(_PAGINATION_CONFIG.get("history_page_size", 4)), 200))
+SESSION_PAGE_SIZE = max(1, min(int(_PAGINATION_CONFIG.get("session_page_size", 20)), 100))
 
 
 class Settings(BaseSettings):
