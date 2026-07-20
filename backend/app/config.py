@@ -5,11 +5,26 @@ config.py - FastAPI 配置
 对应 Spring 的 application.properties + @ConfigurationProperties。
 """
 import os
+import json
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import load_dotenv
 
 # 确保 solar_agent/.env 被加载
 load_dotenv()
+
+
+def _load_history_page_size() -> int:
+    """读取前后端共用的历史消息分页大小。"""
+    config_path = Path(__file__).resolve().parents[2] / "shared" / "pagination.json"
+    try:
+        value = int(json.loads(config_path.read_text(encoding="utf-8"))["history_page_size"])
+        return max(1, min(value, 200))
+    except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return 4
+
+
+HISTORY_PAGE_SIZE = _load_history_page_size()
 
 
 class Settings(BaseSettings):

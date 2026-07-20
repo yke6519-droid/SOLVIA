@@ -163,8 +163,12 @@ export async function createSession() {
   return apiFetch('/sessions', { method: 'POST' })
 }
 
-export async function getSessionMessages(sessionId) {
-  return apiFetch(`/sessions/${encodeURIComponent(sessionId)}/messages`)
+export async function getSessionMessages(sessionId, options = {}) {
+  const params = new URLSearchParams()
+  if (options.limit) params.set('limit', String(options.limit))
+  if (options.beforeId) params.set('before_id', String(options.beforeId))
+  const query = params.toString()
+  return apiFetch(`/sessions/${encodeURIComponent(sessionId)}/messages${query ? `?${query}` : ''}`)
 }
 
 export async function deleteSession(sessionId) {

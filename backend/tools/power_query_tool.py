@@ -25,13 +25,14 @@ TODO:
 """
 import pandas as pd
 from typing import Annotated
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from langchain_core.tools import tool, ToolException
 from dotenv import load_dotenv
 import os
 load_dotenv()
 
 from backend.tools.cache_manager import get_prediction_data_mode
+from backend.app.database import get_engine
 
 # MySQL 连接配置(与其他模块一致)
 MYSQL_URL = os.environ.get("MYSQL_URL")
@@ -55,7 +56,7 @@ def _query_station_by_name(station_name: str = None) -> dict:
         dict: {站点简称: {station_id, name, lat, lon, capacity_kw, location}}
               未匹配到则返回空 dict
     """
-    engine = create_engine(MYSQL_URL)
+    engine = get_engine()
     query = text("""
         SELECT id, station_code, name, capacity_kw, location, province, city,
                longitude, latitude
@@ -111,7 +112,7 @@ def _query_actual_power(station_id: str, predict_date: str) -> pd.DataFrame:
     返回:
         DataFrame(record_time, power_kwh),无数据则返回空 DataFrame
     """
-    engine = create_engine(MYSQL_URL)
+    engine = get_engine()
     query = text("""
         SELECT record_time, power_kwh
         FROM power_generation
@@ -139,7 +140,7 @@ def _query_actual_power_range(station_id: str, start_date: str, end_date: str) -
     返回:
         DataFrame(record_time, power_kwh),无数据则返回空 DataFrame
     """
-    engine = create_engine(MYSQL_URL)
+    engine = get_engine()
     query = text("""
         SELECT record_time, power_kwh
         FROM power_generation
@@ -281,7 +282,7 @@ def get_actual_power_by_range(
     end = parse_flexible_date(end_date)
     station_id, info = _resolve_station_id(station_name)
 
-    engine = create_engine(MYSQL_URL)
+    engine = get_engine()
     query = text("""
         SELECT DATE(record_time) as date, SUM(power_kwh) as daily_total
         FROM power_generation

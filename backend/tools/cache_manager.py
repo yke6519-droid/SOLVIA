@@ -20,9 +20,11 @@ cache_manager.py - 缓存管理模块
 import pandas as pd
 from datetime import date, datetime
 from typing import Optional
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from dotenv import load_dotenv
 import os
+
+from backend.app.database import get_engine
 
 
 load_dotenv()
@@ -78,7 +80,7 @@ def read_prediction_cache(
         命中: DataFrame(time, power_kwh, weather_type) 24行
         未命中: None
     """
-    engine = create_engine(MYSQL_URL)
+    engine = get_engine()
     query = text("""
         SELECT record_time, power_kwh, weather_type, weather_data_mode
         FROM prediction_cache
@@ -107,7 +109,7 @@ def write_prediction_cache(station_id: str, predict_date: str,
     - 唯一键不存在：插入新记录
     - 唯一键已存在：更新预测值、预测时间和状态
     """
-    engine = create_engine(MYSQL_URL)
+    engine = get_engine()
     rows = []
     for _, row in pred_df.iterrows():
         rows.append({
@@ -155,7 +157,7 @@ def clean_prediction_cache() -> int:
 
     返回: 清理的记录数
     """
-    engine = create_engine(MYSQL_URL)
+    engine = get_engine()
     # 把"3小时前写入"的预测标记为失效
     with engine.begin() as conn:
         result = conn.execute(text("""
@@ -187,7 +189,7 @@ def read_forecast_cache(station_id: str, target_date: str) -> Optional[pd.DataFr
     # 先惰性清理过期数据(record_time 已过去的)
     _clean_forecast_cache(station_id)
 
-    engine = create_engine(MYSQL_URL)
+    engine = get_engine()
     query = text("""
         SELECT record_time, temperature_2m, dew_point_2m, cloud_cover_low,
                shortwave_radiation, direct_radiation,
@@ -219,7 +221,7 @@ def write_forecast_cache(station_id: str, df: pd.DataFrame) -> None:
         station_id: 站点ID
         df: open-meteo 格式 DataFrame(含 time + 7 个气象字段)
     """
-    engine = create_engine(MYSQL_URL)
+    engine = get_engine()
     rows = []
     for _, row in df.iterrows():
         rows.append({
@@ -257,7 +259,7 @@ def _clean_forecast_cache(station_id: str) -> int:
     这样下次调用会重新从 forecast API 拉取完整 24h 数据,
     既保持时效性(预报每小时更新),又避免分片截断问题。
     """
-    engine = create_engine(MYSQL_URL)
+    engine = get_engine()
     with engine.begin() as conn:
         result = conn.execute(text("""
             DELETE FROM weather_forecast_cache
@@ -283,7 +285,7 @@ def read_archive_cache(station_id: str, target_date: str) -> Optional[pd.DataFra
         命中: DataFrame(open-meteo 格式,24行)
         未命中: None
     """
-    engine = create_engine(MYSQL_URL)
+    engine = get_engine()
     query = text("""
         SELECT record_time, temperature_2m, dew_point_2m, cloud_cover_low,
                shortwave_radiation, direct_radiation,
@@ -311,7 +313,7 @@ def write_archive_cache(station_id: str, df: pd.DataFrame) -> None:
     """
     写入历史气象缓存。幂等。永久保存,不清理。
     """
-    engine = create_engine(MYSQL_URL)
+    engine = get_engine()
     rows = []
     for _, row in df.iterrows():
         rows.append({

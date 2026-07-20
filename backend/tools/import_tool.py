@@ -31,9 +31,10 @@ import io
 import pandas as pd
 from datetime import datetime
 from typing import Annotated, Optional, Tuple, List, Union
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from langchain_core.tools import tool, ToolException
 from dotenv import load_dotenv
+from backend.app.database import get_engine
 
 load_dotenv()
 
@@ -477,7 +478,7 @@ def execute_import(
 
     display_name = filename or (os.path.basename(file_path) if file_path else "unknown")
 
-    engine = create_engine(MYSQL_URL)
+    engine = get_engine()
     stations_result = []
     total_inserted = 0
     total_skipped = 0

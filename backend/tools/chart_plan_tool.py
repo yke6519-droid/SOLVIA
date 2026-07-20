@@ -181,10 +181,15 @@ def get_power_dataset(
     from backend.tools.date_parser_tool import parse_flexible_date
     from backend.tools.power_query_tool import _resolve_station_id
 
+    # 获取当前用户与会话
     context = get_chart_context()
+    # 确保能力预检已完成，返回当前注册能力和限制
     capability_preflight = _ensure_capability_preflight()
+    # 解析站点名称列表，去重并按顺序保留
     targets = _station_targets(station_name, station_names)
+
     try:
+        # 解析并验证数据来源类型，默认使用实际发电量
         requested_sources = normalize_source_types(source_types)
     except DatasetSourceError as exc:
         raise ToolException(str(exc)) from exc
@@ -211,6 +216,7 @@ def get_power_dataset(
     station_infos: list[dict] = []
     source_labels: dict[str, str] = {}
 
+    # 循环处理每个站点和数据来源，获取发电数据并构建标准化行
     for target in targets:
         station_id, station_info = _resolve_station_id(target)
         station_infos.append({"id": station_id, **station_info})

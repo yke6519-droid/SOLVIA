@@ -43,7 +43,7 @@ class AgentManager:
     def create_session(self, user_id: Optional[int] = None) -> str:
         """创建会话并绑定用户。"""
         session_id = str(uuid.uuid4())[:8]
-        self._agents[session_id] = build_agent(session_id=session_id, use_db=True, user_id=user_id)
+        self._agents[session_id] = build_agent(session_id=session_id, user_id=user_id)
         self._locks[session_id] = asyncio.Lock()
         logger.info("新建会话: %s, user_id=%s", session_id, user_id)
         return session_id
@@ -51,7 +51,7 @@ class AgentManager:
     def get_agent(self, session_id: str, user_id: Optional[int] = None):
         """获取 Agent；重启后从持久化记忆恢复。"""
         if session_id not in self._agents:
-            self._agents[session_id] = build_agent(session_id=session_id, use_db=True, user_id=user_id)
+            self._agents[session_id] = build_agent(session_id=session_id, user_id=user_id)
         self._locks.setdefault(session_id, asyncio.Lock())
         return self._agents[session_id]
 
@@ -75,6 +75,7 @@ class AgentManager:
     def reset_bridge(self, token):
         """恢复之前的 Bridge 上下文。"""
         _current_bridge_var.reset(token)
+        
     def remove_session(self, session_id: str) -> None:
         """清理会话内存状态。"""
         bridge = self._bridges.pop(session_id, None)

@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS agent_summary_store (
     session_id  VARCHAR(255) NOT NULL,
     user_id     BIGINT NULL,
     summary     TEXT NOT NULL,
+    summary_until_message_id INT NULL,
+    summary_version INT NOT NULL DEFAULT 1,
+    source_message_count INT NOT NULL DEFAULT 0,
     updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (session_id),
     INDEX idx_summary_user (user_id)

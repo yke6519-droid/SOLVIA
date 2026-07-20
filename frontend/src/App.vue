@@ -16,6 +16,7 @@ import {
   streamChat,
 } from './api'
 import { useRoute, useRouter } from './router'
+import { HISTORY_PAGE_SIZE } from './config'
 
 const router = useRouter()
 const route = useRoute()
@@ -28,6 +29,9 @@ const input = ref('')
 const isStreaming = ref(false)
 const isLoadingSessions = ref(false)
 const isLoadingMessages = ref(false)
+const isLoadingOlderMessages = ref(false)
+const hasOlderMessages = ref(false)
+const nextBeforeMessageId = ref(null)
 const isReplying = ref(false)
 const pendingQuestion = ref(null)
 const expandedMessageId = ref(null)
@@ -196,7 +200,7 @@ function mapMessage(item, index) {
     ? historicalCharts.reduce((current, chart) => mergeChartData(current, chart), null)
     : legacyChart
   return {
-    id: `history-${item.created_at || index}-${index}`,
+    id: item.id || `history-${item.created_at || index}-${index}`,
     role: item.role === 'user' ? 'user' : 'assistant',
     content: item.content || '',
     time: formatTime(item.created_at),
@@ -235,13 +239,17 @@ async function selectSession(session) {
   }
   markActiveSession(session.id)
   messages.value = []
+  hasOlderMessages.value = false
+  nextBeforeMessageId.value = null
   isLoadingMessages.value = true
   const requestId = ++historyRequestId
   try {
-    const data = await getSessionMessages(session.id)
+    const data = await getSessionMessages(session.id, { limit: HISTORY_PAGE_SIZE })
     if (requestId !== historyRequestId || activeSessionId.value !== session.id) return
     const historicalMessages = (data.messages || []).map(mapMessage)
     messages.value = historicalMessages
+    hasOlderMessages.value = Boolean(data.has_more)
+    nextBeforeMessageId.value = data.next_before_id || null
     if (!session.titleFromServer) {
       updateLocalSessionTitle(session.id, sessionTitleFromMessages(historicalMessages))
     }
@@ -255,12 +263,41 @@ async function selectSession(session) {
   }
 }
 
+async function loadOlderMessages() {
+  const sessionId = activeSessionId.value
+  if (!sessionId || !hasOlderMessages.value || !nextBeforeMessageId.value || isLoadingOlderMessages.value) return
+  const list = messageList.value
+  const previousHeight = list?.scrollHeight || 0
+  const previousTop = list?.scrollTop || 0
+  isLoadingOlderMessages.value = true
+  const requestId = historyRequestId
+  try {
+    const data = await getSessionMessages(sessionId, {
+      limit: HISTORY_PAGE_SIZE,
+      beforeId: nextBeforeMessageId.value,
+    })
+    if (requestId !== historyRequestId || activeSessionId.value !== sessionId) return
+    const olderMessages = (data.messages || []).map(mapMessage)
+    messages.value = [...olderMessages, ...messages.value]
+    hasOlderMessages.value = Boolean(data.has_more)
+    nextBeforeMessageId.value = data.next_before_id || null
+    await nextTick()
+    if (list) list.scrollTop = list.scrollHeight - previousHeight + previousTop
+  } catch (error) {
+    if (requestId === historyRequestId && activeSessionId.value === sessionId) showToast('历史消息加载失败')
+  } finally {
+    isLoadingOlderMessages.value = false
+  }
+}
+
 function createSession() {
   if (isStreaming.value || pendingQuestion.value) return
   historyRequestId += 1
   activeSessionId.value = ''
   sessions.value.forEach((session) => { session.active = false })
   messages.value = []
+  hasOlderMessages.value = false
+  nextBeforeMessageId.value = null
   isLoadingMessages.value = false
   input.value = ''
   pendingQuestion.value = null
@@ -710,6 +747,7 @@ onBeforeUnmount(() => {
           <section v-else class="conversation-view">
             <div class="conversation-header"><h2>{{ conversationTitle }}</h2><div class="view-switcher"><button type="button" :class="{ selected: activeView === 'conversation' }" @click="activeView = 'conversation'">对话</button><button type="button" :class="{ selected: activeView === 'details' }" @click="activeView = 'details'">任务详情</button></div></div>
             <div ref="messageList" class="message-list">
+              <button v-if="!isLoadingMessages && hasOlderMessages" class="load-older-button" type="button" :disabled="isLoadingOlderMessages" @click="loadOlderMessages">{{ isLoadingOlderMessages ? '正在加载更早消息…' : '加载更早消息' }}</button>
               <div v-if="isLoadingMessages" class="message-loading">正在加载历史消息…</div>
               <div v-else-if="messages.length === 0" class="message-empty">这是一个新的会话，输入任务开始吧。</div>
               <article v-for="message in messages" :key="message.id" class="message-row" :class="message.role">

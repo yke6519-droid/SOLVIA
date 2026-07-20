@@ -15,7 +15,6 @@ from typing import Optional
 
 def build_agent(
     session_id: str = "test",
-    use_db: bool = False,
     memory=None,
     user_id: Optional[int] = None,
 ) -> AgentExecutor:
@@ -24,8 +23,7 @@ def build_agent(
 
     参数:
         session_id: 会话标识
-        use_db: True=MySQL持久化记忆, False=纯内存(测试)
-        memory: 外部传入的 memory 实例(优先于 session_id/use_db)
+        memory: 外部传入的 memory 实例(优先于 session_id)
         user_id: 用户ID,用于消息所有者隔离
 
     返回:
@@ -39,7 +37,7 @@ def build_agent(
 
     # 如果外部未传入 memory,内部创建
     if memory is None:
-        memory = build_memory(session_id=session_id, use_db=use_db, llm=llm, user_id=user_id)
+        memory = build_memory(session_id=session_id, llm=llm, user_id=user_id)
 
     agent = create_tool_calling_agent(llm, tools, prompt)
 

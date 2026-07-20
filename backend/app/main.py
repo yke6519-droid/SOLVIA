@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.app.config import settings
 from backend.app.routers import auth, chat, sessions
 from backend.app.services.summary_task_manager import summary_task_manager
+from backend.app.database import dispose_engine
 
 
 logging.basicConfig(
@@ -15,9 +16,6 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%H:%M:%S",
 )
-
-# 启动脚本
-# python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8001
 
 def _configure_proxy_environment() -> None:
     """避免本地服务和指定云服务错误经过系统代理。"""
@@ -79,6 +77,7 @@ def create_app() -> FastAPI:
     @app.on_event("shutdown")
     async def shutdown_background_tasks():
         await summary_task_manager.shutdown()
+        dispose_engine()
 
     return app
 

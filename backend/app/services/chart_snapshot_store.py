@@ -1,20 +1,21 @@
 """Persist structured chart snapshots separately from LangChain's internal message history."""
 import json
 import logging
-import os
 from typing import Iterable, List
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
+
+from backend.app.database import get_engine
 
 logger = logging.getLogger(__name__)
 
 
 def _get_engine():
-    mysql_url = os.getenv("MYSQL_URL")
-    if not mysql_url:
+    try:
+        return get_engine()
+    except RuntimeError:
         return None
-    return create_engine(mysql_url)
 
 
 # 获取最新一条消息的message_id
@@ -61,24 +62,40 @@ def save_chart_snapshot(session_id: str, user_id: int, charts: Iterable[dict]) -
             })
     except SQLAlchemyError:
         logger.exception("图表历史快照保存失败，实时对话不受影响")
-    finally:
-        engine.dispose()
 
 
 # 加载图表快照数据返回给前端渲染
-def load_chart_snapshots(session_id: str, user_id: int) -> List[dict]:
+def load_chart_snapshots(
+    session_id: str,
+    user_id: int,
+    message_ids: Iterable[int] | None = None,
+) -> List[dict]:
     """Load snapshots for the history endpoint; missing table is non-fatal."""
     engine = _get_engine()
     if engine is None:
         return []
     try:
         with engine.connect() as conn:
+            params = {"sid": session_id, "uid": user_id}
+            snapshot_filter = ""
+            selected_ids = [int(item) for item in (message_ids or [])]
+            if selected_ids:
+                placeholders = ", ".join(
+                    f":message_id_{index}" for index in range(len(selected_ids))
+                )
+                params.update({
+                    f"message_id_{index}": message_id
+                    for index, message_id in enumerate(selected_ids)
+                })
+                snapshot_filter = (
+                    f" AND (message_id IN ({placeholders}) OR message_id IS NULL)"
+                )
             rows = conn.execute(text(
                 "SELECT message_id, chart_data, created_at "
                 "FROM chart_snapshot_store "
-                "WHERE session_id = :sid AND user_id = :uid "
-                "ORDER BY created_at, id"
-            ), {"sid": session_id, "uid": user_id}).fetchall()
+                "WHERE session_id = :sid AND user_id = :uid"
+                f"{snapshot_filter} ORDER BY created_at, id"
+            ), params).fetchall()
         # 解析每一行的 chart_data JSON，返回一个列表，每个元素包含 message_id、charts 列表和 created_at
         snapshots = []
         for row in rows:
@@ -102,8 +119,6 @@ def load_chart_snapshots(session_id: str, user_id: int) -> List[dict]:
     except SQLAlchemyError:
         logger.warning("图表历史表不存在或读取失败，请执行图表快照迁移", exc_info=True)
         return []
-    finally:
-        engine.dispose()
 
 
 def delete_chart_snapshots(session_id: str, user_id: int) -> None:
@@ -117,5 +132,3 @@ def delete_chart_snapshots(session_id: str, user_id: int) -> None:
             ), {"sid": session_id, "uid": user_id})
     except SQLAlchemyError:
         logger.warning("图表历史快照删除失败", exc_info=True)
-    finally:
-        engine.dispose()
