@@ -1,6 +1,7 @@
 """Thin Agent-facing wrappers for the structured chart pipeline."""
 
 import json
+from datetime import date
 from typing import Annotated
 from uuid import uuid4
 
@@ -126,7 +127,7 @@ def _binding_hints(
         })
     elif station_count > 1 and source_count > 1:
         unsupported.append("多站点逐小时对比第一阶段只能选择一种数据来源")
-    elif compare_capability and station_count <= compare_capability.max_series and (
+    elif compare_capability and max(station_count, source_count) <= compare_capability.max_series and (
         station_count > 1 or source_count > 1
     ):
         candidates.append({
@@ -140,6 +141,8 @@ def _binding_hints(
             "value_field": "value_kwh",
             "series_count": max(station_count, source_count),
             "max_series": compare_capability.max_series,
+            "max_points_per_series": compare_capability.max_points_per_series,
+            "max_total_points": compare_capability.max_total_points,
         })
     else:
         unsupported.append("逐小时对比序列数量超过当前能力上限")
@@ -164,6 +167,75 @@ def _station_targets(station_name: str | None, station_names: list[str] | None) 
     if not values:
         raise ToolException("至少提供一个站点名称")
     return list(dict.fromkeys(values))
+
+
+def _validate_range_shape(
+    *,
+    station_count: int,
+    source_count: int,
+    granularity: str,
+    period_start: str,
+    period_end: str,
+) -> dict:
+    """Validate a range request before any station/database lookup.
+
+    A date range means complete natural days.  ``hourly`` therefore expands
+    to 24 points per day (00:00 through 23:00); callers do not provide a
+    separate time-of-day range.  The limits come from the capability registry
+    so the tool remains extensible when a new capability is registered.
+    """
+
+    period_days = (date.fromisoformat(period_end) - date.fromisoformat(period_start)).days + 1
+    if period_days <= 0:
+        raise ToolException("日期范围必须至少包含一天")
+
+    if granularity == "hourly":
+        if station_count > 1 and source_count > 1:
+            raise ToolException("第一阶段暂不支持多站点同时展开实际和预测序列")
+        capability_id = (
+            "time_series_trend"
+            if station_count == 1 and source_count == 1
+            else "time_series_compare"
+        )
+        points_per_series = period_days * 24
+        series_count = max(station_count, source_count)
+    elif granularity == "daily_total":
+        if source_count > 1:
+            raise ToolException("周期汇总第一阶段只支持一种数据来源")
+        capability_id = "period_aggregate"
+        points_per_series = period_days
+        series_count = station_count
+    else:
+        raise ToolException("不支持的日期范围数据粒度")
+
+    capability = get_capability(capability_id)
+    if capability is None:
+        raise ToolException(f"当前未启用图表能力: {capability_id}")
+    if series_count < capability.min_series or series_count > capability.max_series:
+        raise ToolException(
+            f"序列数量 {series_count} 超出 {capability_id} 的允许范围 "
+            f"{capability.min_series}~{capability.max_series}"
+        )
+    if points_per_series > capability.max_points_per_series:
+        raise ToolException(
+            f"日期范围展开后每条序列有 {points_per_series} 个点，"
+            f"超过 {capability_id} 的上限 {capability.max_points_per_series}；"
+            "请缩短日期范围"
+        )
+    total_points = points_per_series * series_count
+    if total_points > capability.max_total_points:
+        raise ToolException(
+            f"日期范围展开后共有 {total_points} 个点，"
+            f"超过 {capability_id} 的总点数上限 {capability.max_total_points}；"
+            "请缩短日期范围或减少站点/序列"
+        )
+    return {
+        "capability_id": capability_id,
+        "period_days": period_days,
+        "points_per_series": points_per_series,
+        "series_count": series_count,
+        "total_points": total_points,
+    }
 
 
 @tool
@@ -196,15 +268,22 @@ def get_power_dataset(
 
     if granularity not in {"hourly", "daily_total"}:
         raise ToolException("不支持的数据粒度。可选值：hourly、daily_total")
-    if start_date or end_date:
+    is_range_request = bool(start_date or end_date)
+    range_shape = None
+    if is_range_request:
         if not start_date or not end_date:
             raise ToolException("周期汇总必须同时提供 start_date 和 end_date")
-        if granularity != "daily_total":
-            raise ToolException("日期范围查询第一阶段只支持 daily_total 粒度")
         period_start = parse_flexible_date(start_date)
         period_end = parse_flexible_date(end_date)
         if period_start > period_end:
             raise ToolException("start_date 不能晚于 end_date")
+        range_shape = _validate_range_shape(
+            station_count=len(targets),
+            source_count=len(requested_sources),
+            granularity=granularity,
+            period_start=period_start,
+            period_end=period_end,
+        )
     else:
         if not target_date:
             raise ToolException("必须提供 target_date，或同时提供 start_date 和 end_date")
@@ -222,10 +301,11 @@ def get_power_dataset(
         station_infos.append({"id": station_id, **station_info})
         for source_type in requested_sources:
             try:
-                if is_daily:
+                if is_range_request:
                     frame = load_power_source_range(source_type, station_id, period_start, period_end)
-                    frame["date"] = frame["timestamp"].dt.strftime("%Y-%m-%d")
-                    frame = frame.groupby("date", as_index=False)["value_kwh"].sum().sort_values("date")
+                    if is_daily:
+                        frame["date"] = frame["timestamp"].dt.strftime("%Y-%m-%d")
+                        frame = frame.groupby("date", as_index=False)["value_kwh"].sum().sort_values("date")
                 else:
                     frame = load_power_source(source_type, station_id, period_start)
             except DatasetSourceError as exc:
@@ -275,6 +355,14 @@ def get_power_dataset(
             "date": period_start if period_start == period_end else None,
             "period_start": period_start,
             "period_end": period_end,
+            "range_semantics": (
+                "每个自然日00:00-23:00"
+                if is_range_request and not is_daily
+                else "按自然日汇总"
+                if is_range_request
+                else None
+            ),
+            "period_days": range_shape["period_days"] if range_shape else 1,
             "granularity": granularity,
             "source_types": requested_sources,
             "source_type": requested_sources[0] if len(requested_sources) == 1 else None,

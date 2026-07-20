@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api", tags=["sessions"])
 logger = logging.getLogger(__name__)
 
 DEFAULT_SESSION_TITLE = "新会话"
-MAX_SESSION_TITLE_LENGTH = 15
+MAX_SESSION_TITLE_LENGTH = 10
 
 
 def _get_engine():
