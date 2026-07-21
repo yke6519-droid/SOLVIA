@@ -1,133 +1,202 @@
 # SolarAgent
 
-SolarAgent 是一个面向光伏电站场景的智能分析 Agent。系统通过大语言模型理解用户意图，调用气象、发电量、预测、缓存、文件和知识库工具，完成光伏站点查询、发电预测、历史回测和数据分析。当前已形成前后端分离结构：后端提供 FastAPI 接口和 Agent 编排，前端使用 Vue 3 + Vite 构建独立工作台。
+SolarAgent 是一个面向光伏电站运营场景的智能分析系统。用户可以通过自然语言查询站点、气象和发电量数据，执行光伏发电预测、历史回测与图表分析。
 
-项目定位不是单纯的聊天机器人，而是一个具备生产产品雏形的 Agent 系统：有用户认证、会话隔离、持久化记忆、工具调用、人工确认、数据缓存和结果验证等完整链路。
+项目已经完成前后端分离：后端使用 FastAPI 提供认证、会话、Agent 和流式接口，前端使用 Vue 3 + Vite 构建独立工作台。
 
-## 当前版本能力
+## 技术栈
 
-### 1. 光伏业务能力
+| 模块 | 技术 |
+| --- | --- |
+| 前端 | Vue 3、Vite、Axios、Fetch、ECharts、MarkdownIt、DOMPurify |
+| 后端 | FastAPI、SSE、LangChain、Pydantic |
+| 数据库 | MySQL、SQLAlchemy、PyMySQL |
+| 认证 | JWT、HttpOnly Refresh Cookie、Argon2id |
+| 预测 | TensorFlow/Keras、LightGBM、XGBoost、Pandas、NumPy |
 
-#### 1.1 站点与发电数据
+## 已实现功能
 
-- 查询站点基本信息、站点位置和装机容量。
-- 查询历史实际发电量和发电量区间。
-- 支持发电数据导入、表格读写、文件生成和文件验证。
+### 1. 前端工作台
 
-#### 1.2 气象与发电预测
+#### 1.1 登录、路由与主题
+
+- 独立登录页和工作台路由，未登录用户不能直接进入工作台。
+- 支持浅色、深色两种主题。
+
+#### 1.2 会话管理
+
+- 进入工作台默认展示欢迎页，不自动进入最近会话。
+- 点击首页快捷任务卡片后，只将任务短语填入输入框，由用户确认或修改后发送。
+- 左侧会话列表支持分页加载、选择、重命名和删除。
+- “回到首页”不会立即创建空会话，用户第一次发送消息时才创建新会话。
+- 会话名称默认截取第一条用户消息的前 10 个字符，也支持手动重命名。
+- 历史消息按页加载，向上加载旧消息时保持当前滚动位置。
+
+#### 1.3 流式交互与 AskUser
+
+- 支持 SSE 流式对话，展示文本增量、工具调用、工具结果、等待确认和任务完成状态。
+- 支持 AskUser 确认卡片，用户提交回答后继续原来的 Agent 任务。
+
+#### 1.4 内容与图表渲染
+
+- Agent Markdown 输出通过 MarkdownIt 渲染，并使用 DOMPurify 清洗。
+- ECharts 图表嵌入对话流，支持 Tooltip、浅色/深色主题和历史会话图表恢复。
+
+### 2. 用户认证与访问控制
+
+#### 2.1 用户认证
+
+- 支持用户注册、登录、退出登录。
+- 密码使用 Argon2id 哈希保存。
+- Access Token 使用 JWT Bearer Token，业务接口从 Token 解析当前用户。
+
+#### 2.2 Token 续期
+
+- Refresh Token 通过 HttpOnly Cookie 保存，前端 JavaScript 无法直接读取。
+- Refresh Token 在服务端保存哈希，并支持轮换、撤销和绝对过期时间。
+- 普通 REST 请求收到 401 后，可刷新 Access Token 并重放原请求一次。
+- SSE 流式请求收到 401 后，可刷新 Access Token 并重新建立流式连接一次。
+- 只有检测到用户键盘、鼠标或触摸操作并处于活跃窗口时，才允许主动续期。
+- 登录会话真正失效后，前端展示“重新登录”弹窗，清理本地状态并返回登录页。
+
+#### 2.3 用户与会话隔离
+
+- 用户、会话、消息、摘要和图表快照均按 `user_id` 隔离。
+
+### 3. Agent 编排与长期记忆
+
+#### 3.1 工具调用与执行约束
+
+- Agent 通过 LangChain 工具调用完成日期、站点、气象、发电量、预测、文件和图表任务。
+- Prompt 要求 Agent 先拆分任务，再按步骤逐个调用工具。
+- 只有获得真实工具结果后，Agent 才能向用户声明查询、分析或生成结果。
+- 日期先通过 `parse_date` 标准化，工具错误和无数据情况如实返回。
+
+#### 3.2 会话记忆
+
+- 会话、消息和摘要持久化到 MySQL。
+- Agent 每次只读取最近消息窗口和历史摘要，不加载整段历史对话。
+- 摘要使用增量游标，只处理尚未摘要且已离开最近窗口的消息。
+- 摘要任务在对话完成后异步执行，不阻塞本次回答。
+- 同一会话只允许一个摘要任务运行，并使用摘要版本进行并发更新保护。
+
+#### 3.3 站点结构化解析与上下文复用
+
+- 支持按站点简称查询站点名称、ID、位置、经纬度和装机容量。
+- 单次 Agent 任务中，已解析的结构化站点对象会被复用，避免不同工具重复询问同一个模糊站点。
+- 模糊名称匹配到多个站点时，通过 AskUser 让用户选择一次。
+- 用户明确选择的站点会写入当前会话的 `active_station`。
+- 下一轮使用“它”“这个站点”“刚才那个站点”等指代时，可以复用上次确认的站点。
+- 用户明确提供新站点、站点列表或地区时，新范围优先，不会被旧的 `active_station` 覆盖。
+- 支持单站点、明确多站点和地区站点三种范围。
+- 地区查询根据数据库中的省、市、地址和站点名称进行模糊匹配，不维护写死的地区白名单。
+- 地区查询默认最多返回 20 个站点，超过限制时要求用户缩小范围或分批执行。
+
+### 4. 光伏业务能力
+
+#### 4.1 站点与发电数据
+
+- 查询站点基本信息、位置和装机容量。
+- 查询单日或日期范围内的实际发电量。
+- 查询已经缓存的预测发电量。
+
+#### 4.2 气象与发电预测
 
 - 获取历史气象实况和未来天气预报。
-- 执行光伏发电量预测。
-- 对比预测发电量与实际发电量，并输出偏差、MAE、RMSE、MAPE 等指标。
-- 支持历史日期的实况回测模式和未来日期的天气预报模式。
+- 执行单站点 24 小时光伏发电量预测。
+- 预测前在工具内部确认最终站点和标准日期。
+- 历史日期使用实况气象进行回测，未来日期使用天气预报进行预测。
+- 对比预测值与实际值，计算偏差、MAE、RMSE、MAPE 等指标。
 
-#### 1.3 数据缓存与复用
+#### 4.3 缓存与文件工具
 
-- 预测结果、气象数据和发电数据使用数据库缓存，减少重复请求和重复计算。
-- 根据预测日期和气象数据模式区分历史回测缓存与未来预报缓存。
+- 缓存气象数据、模型实例和预测结果，减少重复请求和重复计算。
+- 支持知识库检索、文件读写、文件校验、表格导入导出和发电量数据导入。
 
-### 2. 数据分析与可视化能力
+### 5. 图表可视化
 
-#### 2.1 数据分析扩展
+#### 5.1 图表生成链路
 
-- 支持知识库检索。
-- 支持将业务查询结果整理为结构化数据制品，供后续分析和图表生成使用。
-
-#### 2.2 第一版图表能力
-
-- 当前开放三类注册能力：单序列时间趋势、多序列时间对比、周期汇总趋势。
-- 支持单站点逐小时实际/预测趋势。
-- 支持单站点实际/预测对比。
-- 支持多站点同一来源逐小时对比。
-- 支持单站点或多站点日总发电量周期汇总。
-- 多站点多日柱状图按实际站点数量动态生成序列，最多支持 4 条；多站点查询限定使用一种数据来源（实际或预测）。
-- 图表使用结构化 ECharts 数据描述，支持历史会话中的图表快照恢复。
-
-### 3. Agent 编排与交互能力
-
-#### 3.1 工具调用与业务流程
-
-- 基于工具调用完成多步骤业务任务。
-- Agent 只有在真正调用工具并获得结果后，才能向用户声明任务进度或结果。
-- 使用系统日期上下文，避免“5月1日”被错误解释为旧年份。
-- 日期先经过 `parse_date` 统一转换为 `YYYY-MM-DD`。
-- 站点名称模糊或匹配多个站点时，通过 `ask_user` 请求用户确认。
-- 发电预测前要求用户核对站点和日期。
-
-#### 3.2 会话记忆与上下文管理
-
-- 支持连续多轮对话，并将会话记忆持久化到 MySQL。
-- 使用滑动窗口和摘要机制控制长期对话的 Token 消耗。
-
-#### 3.3 流式执行反馈
-
-- 支持 SSE 流式输出。
-- 前端可实时展示 Agent 的思考、工具调用、工具结果和增量回答。
-
-### 4. 安全与访问控制能力
-
-#### 4.1 身份认证与数据隔离
-
-- 使用 JWT Bearer Token 认证。
-- 用户身份从服务端 Token 中解析，不信任前端传入的 `user_id`。
-- 使用 Argon2id 保存密码哈希，不再保留旧哈希算法兼容逻辑。
-- 会话、消息和长期记忆按照用户进行隔离。
-- 每个 Agent 会话绑定独立的 `session_id`。
-- AskUser 交互按照会话路由，避免跨用户或跨会话响应。
-- 敏感配置通过 `.env` 管理，不应提交真实密钥到 Git。
-
-#### 4.2 输出安全与前端访问保护
-
-- Agent 输出统一按 Markdown 处理，前端使用 MarkdownIt + DOMPurify 安全渲染。
-- Markdown、链接、工具结果和图表提示框均进行安全渲染或转义，避免 Agent 输出引入 XSS。
-- 前端登录页和工作台路由分离，未持有有效登录态时会被路由守卫拦截到 `/login`。
-
-## 系统架构
+新图表任务采用以下固定链路：
 
 ```text
-用户浏览器
-        |
-        v
-Vue 3 + Vite 前端工作台
-  ├── 登录页 / 路由守卫 / 登录态
-  ├── Axios：登录、会话、历史消息等 REST 请求
-  ├── Fetch：POST /api/chat/stream 的 SSE 流式读取
-  ├── MarkdownIt + DOMPurify：安全渲染 Agent 输出
-  └── ECharts：结构化图表渲染与历史快照恢复
-        |
-        | JWT + HTTP / SSE
-        v
-FastAPI API 层
-  ├── auth       注册、登录、Token
-  ├── chat       普通对话、SSE 流式对话、AskUser 回复
-  └── sessions   会话创建、查询、删除和历史消息
-        |
-        v
-Agent Manager
-  ├── Agent 构建
-  ├── 用户与会话隔离
-  ├── AskUserBridge
-  ├── 流式事件编排
-  └── 长期记忆加载与保存
-        |
-        v
-LLM + 工具调用
-  ├── 日期与站点工具
-  ├── 气象数据工具
-  ├── 光伏预测工具
-  ├── 发电量查询工具
-  ├── 文件与表格工具
-  ├── 知识库工具
-  ├── 图表数据工具
-  └── 用户确认工具
-        |
-        v
-MySQL / SQLite
-  ├── 用户与认证数据
-  ├── 会话、消息和长期记忆
-  ├── 图表结构化快照
-  ├── 发电量数据
-  └── 气象、预测和回测缓存
+get_chart_capabilities
+        -> get_power_dataset
+        -> DatasetArtifact
+        -> create_chart_plan
+        -> ChartSpec
+        -> SSE chart_spec
+        -> Vue + ECharts
+```
+
+- Agent 先从图表能力注册表选择已开放能力。
+- `get_power_dataset` 调用真实业务查询或预测缓存，生成标准化数据制品。
+- Agent 只提交受限的 ChartPlan，不直接生成 JavaScript、HTML 或 ECharts formatter。
+- 后端校验数据归属、字段角色、数据粒度、序列数量和点数限制。
+- ChartService 将合法 ChartPlan 编译成前后端统一的 ChartSpec。
+- 图表快照独立保存到 MySQL，重新打开历史会话时可以再次渲染。
+
+#### 5.2 图表能力注册表
+
+当前开放三类图表能力：
+
+| capability_id | 功能 | 图表 | 主要限制 |
+| --- | --- | --- | --- |
+| `time_series_trend` | 单序列逐小时时间趋势 | 折线图 | 1 条序列，每条最多 744 点 |
+| `time_series_compare` | 预测/实际或多站点逐小时对比 | 折线图 | 2～4 条序列，总计最多 2976 点 |
+| `period_aggregate` | 单站点或多站点日总发电量 | 柱状图 | 1～4 条序列，每条最多 50 点 |
+
+多站点对比只允许使用一种数据来源，即只比较实际数据或只比较预测数据；单站点可以进行预测与实际对比。
+
+### 6. 数据库、性能与异常处理
+
+#### 6.1 数据库与查询性能
+
+- 数据库使用进程级 SQLAlchemy Engine 和连接池，查询通过短连接获取和归还连接。
+- 会话列表按 `last_message_at` 倒序排列，使用游标分页代替大偏移量分页。
+- 历史消息使用 `before_id` 游标分页，只查询当前需要的一页。
+- 前后端分页大小统一读取 `shared/pagination.json`。
+- 会话列表使用 `(user_id, last_message_at, session_id)` 联合索引。
+
+#### 6.2 流式协议与异常处理
+
+- `POST /api/chat/stream` 使用 SSE 返回 Agent 执行过程。
+- 前端通过 Fetch + `ReadableStream` 消费 POST 流式响应。
+- 普通 REST 接口使用 Axios，并与流式请求共享登录状态和错误协议。
+- 同一个会话同时只执行一个 Agent 任务，重复提交返回 `SESSION_BUSY`。
+- AskUser 按用户和会话路由，避免其他会话提交错误回答。
+- 后端统一返回结构化异常：`code`、`message`、`status`、`retryable`、`details` 和 `request_id`。
+- 前端根据异常码区分登录失效、参数错误、会话冲突、数据不存在、数据库异常和上游服务异常。
+- 未处理异常只向前端返回安全提示，详细堆栈保留在后端日志中。
+
+## 系统结构
+
+```text
+Vue 3 工作台
+  ├── Axios：认证、会话、历史消息
+  ├── Fetch：SSE 流式对话
+  ├── MarkdownIt + DOMPurify
+  └── ECharts
+          |
+          v
+FastAPI
+  ├── auth：注册、登录、刷新、退出
+  ├── sessions：会话与历史消息
+  └── chat：Agent、SSE、AskUser
+          |
+          v
+LangChain Agent + 业务工具
+  ├── 站点、地区、日期、气象
+  ├── 实际发电量与预测
+  ├── 图表、文件、表格、知识库
+  └── 结构化站点上下文
+          |
+          v
+MySQL
+  ├── 用户和刷新会话
+  ├── 会话、消息、摘要和上下文
+  ├── 实际发电量、气象和预测缓存
+  └── 图表快照
 ```
 
 ## 主要目录
@@ -135,276 +204,163 @@ MySQL / SQLite
 ```text
 solar_agent/
 ├── backend/
-│   ├── app/                  FastAPI 应用、路由、服务和 API 模型
-│   │   └── routers/          auth、chat、sessions 路由
-│   ├── Agent/                Agent 编排、提示词、记忆和 LLM 组装
-│   ├── tools/                光伏预测、查询、气象、文件和图表工具
-│   ├── sql/                  数据库结构和迁移脚本
-│   └── temp/                 后端运行时文件和导出目录
-├── frontend/                 独立 Vue 3 + Vite 前端
-│   ├── src/api.js            Axios REST + Fetch SSE 业务 API 层
-│   ├── src/router.js         登录态路由守卫
-│   ├── src/components/       Markdown 消息和 ECharts 图表组件
-│   └── src/views/LoginView.vue 登录页面
-├── tests/                    阶段性契约测试
-├── docs/                     交接、架构、日报和学习文档
-├── .env                      本地环境变量，不提交真实密钥
-└── requirements.txt          固定版本依赖
+│   ├── Agent/                 Agent、Prompt、LLM 和长期记忆
+│   ├── app/
+│   │   ├── charting/          图表注册表、校验器和 ChartService
+│   │   ├── routers/           auth、chat、sessions 路由
+│   │   └── services/          认证、摘要、站点解析和会话服务
+│   ├── sql/                   初始化和数据库迁移脚本
+│   ├── temp/                  文件读写测试与运行目录
+│   └── tools/                 预测、查询、气象、图表和文件工具
+├── frontend/
+│   ├── src/api.js             REST 与 SSE 业务 API
+│   ├── src/App.vue            当前工作台主页面
+│   ├── src/router.js          登录路由守卫
+│   ├── src/components/        AskUser、Markdown、ECharts 组件
+│   └── src/views/LoginView.vue
+├── shared/pagination.json     前后端共用分页大小
+├── docs/                      架构、复盘和学习文档
+└── requirements.txt
 ```
 
-## 关键业务链路
+## 环境配置
 
-### 普通对话
-
-```text
-登录获取 JWT
-  -> 前端保存登录态并进入工作台
-  -> 每次进入工作台默认展示欢迎页
-  -> 用户创建或选择 session_id
-  -> POST /api/chat/stream
-  -> Agent 读取会话记忆
-  -> LLM 判断意图
-  -> SSE 增量返回 thinking / token / tool_start / tool_end / done
-  -> 前端实时更新消息和执行轨迹
-  -> 保存消息与记忆
-```
-
-前端的业务调用入口保持统一：普通 REST 请求（登录、会话、历史消息、删除等）使用 Axios；流式对话使用 Fetch 直接消费 `ReadableStream`。这样调用方只依赖 `login()`、`listSessions()`、`streamChat()` 等业务函数，不需要感知底层传输方式。
-
-### 前端 Markdown 安全渲染
-
-```text
-Agent / 工具返回 Markdown
-  -> MarkdownIt 解析（禁用原始 HTML）
-  -> DOMPurify 清洗标签、属性和协议
-  -> Vue 渲染安全 HTML
-  -> 链接和 ECharts tooltip 继续做属性转义
-```
-
-流式输出期间，每次收到增量内容都会走同一套渲染链路，避免只在最终结果阶段清洗造成安全边界缺口。
-
-### AskUser 用户确认
-
-```text
-Agent 发现站点或日期不明确
-  -> 调用 ask_user
-  -> AskUserBridge 暂停当前 Agent 线程
-  -> SSE 通道通知前端弹出问题
-  -> 用户提交回答
-  -> 后端按 session_id 唤醒对应 Bridge
-  -> Agent 继续执行后续工具
-```
-
-### 历史回测
-
-```text
-用户请求过去日期预测
-  -> 判断目标日期早于当前日期
-  -> 使用历史气象实况接口
-  -> 标记 weather_data_mode=historical_actual
-  -> 生成预测结果
-  -> 查询实际发电量
-  -> 输出预测与实际对比
-```
-
-未来日期则使用天气预报接口，并标记为 `forecast`。两种模式使用独立缓存，避免历史实况和未来预报相互污染。
-
-### 结构化图表与历史恢复
-
-```text
-用户提出可视化需求
-  -> Agent 读取图表能力注册表
-  -> get_power_dataset 查询并生成 DatasetArtifact
-  -> Agent 提交受限 ChartPlan
-  -> ChartService / Validator 校验并生成 ChartSpec
-  -> SSE 返回独立 chart_spec 事件
-  -> 前端按白名单模板渲染 ECharts
-  -> 历史会话读取 ChartSpec 快照并重新 init / setOption
-```
-
-图表类型由 Agent 在能力注册表允许的范围内选择，数据由后端业务工具提供，前端只负责按模板渲染，不执行 Agent 返回的前端代码。当前第一版开放三类能力：单序列时间趋势、多序列时间对比、周期汇总趋势；多站点多日柱状图的序列数量根据实际站点动态生成，最多四条。
-
-图表流程还包含代码级预检：如果当前执行上下文的能力预检状态为 `false`，工具入口会自动读取注册表并切换为 `true`，而不是因为 Agent 漏调用能力查询导致任务失败。
-
-## 预测缓存迁移
-
-历史回测模式使用了 `prediction_cache.weather_data_mode` 字段。已有数据库需要执行一次迁移：
-
-```text
-backend/sql/migrations/002_prediction_weather_data_mode.sql
-```
-
-迁移后，预测缓存按照以下模式区分：
-
-- `historical_actual`：历史实况回测。
-- `forecast`：未来天气预报预测。
-
-如果已经清理过旧缓存，仍然需要执行数据库结构迁移，因为代码会查询新的模式字段。
-
-## 环境准备
-
-项目使用现有虚拟环境，不需要重建：
-
-```powershell
-cd D:\AAA_myProjects\howso\myAgent\solar_agent
-$python = "D:\AAA_myProjects\howso\myAgent\solar_agent\.venv\Scripts\python.exe"
-& $python -m pip install -r requirements.txt
-```
-
-`.env` 至少需要根据本地环境配置以下内容：
+项目根目录创建 `.env`，至少配置：
 
 ```env
 API_KEY=your_api_key
 BASE_URL=https://your-openai-compatible-endpoint/v1
 MODEL_NAME=your_model_name
-MYSQL_URL=your_mysql_connection_string
-JWT_SECRET_KEY=your_long_random_secret
-JWT_ACCESS_TOKEN_EXPIRE_SECONDS=3600
+
+MYSQL_URL=mysql+pymysql://user:password@127.0.0.1:3306/solar_agent?charset=utf8mb4
+
+JWT_SECRET_KEY=replace_with_at_least_32_characters
+JWT_ACCESS_TOKEN_EXPIRE_SECONDS=900
+JWT_REFRESH_TOKEN_EXPIRE_SECONDS=604800
+JWT_REFRESH_COOKIE_SECURE=false
+
 ASK_USER_TIMEOUT=120
+FILE_DIR=D:/your/runtime/files
+MODEL_SUNNY=D:/your/models/sunny
+MODEL_CLOUDY=D:/your/models/cloudy
 ```
 
-不要把真实 API Key、数据库密码或 JWT 密钥提交到 Git 仓库。
+生产环境必须使用足够强度的 `JWT_SECRET_KEY`，并将 `JWT_REFRESH_COOKIE_SECURE` 设置为 `true`。不要提交真实密钥、数据库密码和模型服务凭证。
 
-### 安装前端依赖
-
-```powershell
-cd D:\AAA_myProjects\howso\myAgent\solar_agent\frontend
-npm install
-```
-
-如需指定后端地址，可在 `frontend/.env.local` 中配置：
+前端需要指定后端地址时，在 `frontend/.env.local` 中配置：
 
 ```env
 VITE_API_BASE_URL=http://127.0.0.1:8001/api
 ```
 
-## 启动方式
+## 安装与启动
 
-### 启动 FastAPI 服务
+### 后端
 
 ```powershell
 cd D:\AAA_myProjects\howso\myAgent\solar_agent
-uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8001
+& .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+& .\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --reload --reload-dir backend --host 0.0.0.0 --port 8001
 ```
 
-服务启动后可以访问：
+使用 `--reload-dir backend` 可以避免 Uvicorn 扫描前端依赖缓存目录。
+
+后端启动后可访问：
 
 - API 文档：`http://127.0.0.1:8001/docs`
-- API 服务信息：`http://127.0.0.1:8001/`
-- 流式对话：`POST /api/chat/stream`
-- 普通对话：`POST /api/chat`
-- 注册：`POST /api/auth/register`
-- 登录：`POST /api/auth/login`
+- 服务地址：`http://127.0.0.1:8001/`
 
-### 启动 Vue 前端
+### 前端
 
 ```powershell
 cd D:\AAA_myProjects\howso\myAgent\solar_agent\frontend
+npm install
 npm run dev
 ```
 
-前端默认访问：`http://localhost:5173`。开发环境下通过 `VITE_API_BASE_URL` 连接 FastAPI；未登录访问工作台会自动跳转到 `/login`。
+Vite 默认访问地址为 `http://localhost:5173`。如果端口被占用，Vite 会自动尝试下一个可用端口。
+
+## 主要接口
+
+| 方法 | 路径 | 功能 |
+| --- | --- | --- |
+| POST | `/api/auth/register` | 注册用户 |
+| POST | `/api/auth/login` | 登录并创建刷新会话 |
+| POST | `/api/auth/refresh` | 轮换 Refresh Token 并签发新 Access Token |
+| POST | `/api/auth/logout` | 撤销刷新会话并清除 Cookie |
+| POST | `/api/sessions` | 创建新会话 |
+| GET | `/api/sessions` | 游标分页查询会话列表 |
+| GET | `/api/sessions/{session_id}/messages` | 分页查询历史消息和图表快照 |
+| PATCH | `/api/sessions/{session_id}` | 重命名会话 |
+| DELETE | `/api/sessions/{session_id}` | 删除会话及关联记录 |
+| POST | `/api/chat/stream` | SSE 流式 Agent 对话 |
+| POST | `/api/chat` | 非流式兼容接口 |
+| POST | `/api/chat/{session_id}/reply` | 回复 AskUser 问题 |
 
 ## 数据库初始化与迁移
 
-当前项目的 DDL 面向 MySQL 8.0+。首次部署空数据库时，执行基础结构脚本：
+首次部署空数据库时执行：
 
 1. `backend/sql/init_schema.sql`
 2. `backend/sql/cache_schema.sql`
 3. `backend/sql/memory_schema.sql`
 
-已有数据库不要重新执行带有 `DROP TABLE` 的基础脚本，应根据数据库当前结构按顺序执行迁移：
+已有数据库按实际缺失结构执行对应迁移，不要重新执行包含 `DROP TABLE` 的初始化脚本：
 
-1. `backend/sql/migrations/001_phase1_memory_schema.sql`：对话消息和摘要表兼容升级。
-2. `backend/sql/migrations/002_prediction_weather_data_mode.sql`：预测缓存增加气象数据模式，区分历史实况回测和未来预报。
-3. `backend/sql/migrations/003_chart_snapshot_store.sql`：增加历史 ECharts 图表快照表。
-4. `backend/sql/migrations/004_chat_session.sql`：增加会话元数据和会话名称表。
+| 文件 | 作用 |
+| --- | --- |
+| `001_phase1_memory_schema.sql` | 消息、摘要和用户隔离基础升级 |
+| `002_incremental_summary.sql` | 增量摘要游标、版本和消息计数 |
+| `002_prediction_weather_data_mode.sql` | 区分历史实况回测与未来预报缓存 |
+| `003_chart_snapshot_store.sql` | 保存历史 ChartSpec 图表快照 |
+| `004_chat_session.sql` | 会话标题和最后消息时间 |
+| `005_session_cursor_pagination.sql` | 会话游标分页联合索引 |
+| `006_refresh_token_sessions.sql` | 可撤销、可轮换的刷新会话表 |
+| `006_session_context.sql` | 会话级结构化上下文 `context_json` |
 
-当前 `memory_schema.sql` 已包含会话元数据和图表快照的完整结构，因此新空库不需要重复执行 `003`、`004`；这两个迁移文件用于旧数据库升级。迁移脚本不会删除业务数据，执行前仍建议备份数据库。
+迁移脚本设计为可重复执行，但操作真实数据库前仍应先备份。
 
-## 测试与验证
+## 测试
 
-使用项目虚拟环境执行阶段性契约测试：
+后端针对当前新增能力提供了回归测试：
 
 ```powershell
-$python = "D:\AAA_myProjects\howso\myAgent\solar_agent\.venv\Scripts\python.exe"
-& $python -m pytest -q tests\test_phase1_contract.py
-& $python -m compileall -q backend tests
+cd D:\AAA_myProjects\howso\myAgent\solar_agent
+& .\.venv\Scripts\python.exe -m pytest -q backend\tests
+& .\.venv\Scripts\python.exe -m compileall -q backend
 ```
 
-重点验证内容包括：
+前端构建检查：
 
-- Token 认证和用户身份隔离。
-- Argon2id 密码哈希。
-- AskUser 实际传递用户问题并按会话恢复。
-- 日期解析和当前日期注入。
-- Agent 工具执行真实性。
-- 历史实况回测与未来预报缓存隔离。
+```powershell
+cd D:\AAA_myProjects\howso\myAgent\solar_agent\frontend
+npm run build
+```
 
-## 当前产品约定与限制
+测试覆盖图表注册能力、日期范围限制、结构化异常协议、Refresh Token、站点解析复用和地区站点范围。
 
-- 当前已完成 Vue 3 + Vite 独立前端的第一阶段闭环：登录、登录态保存、路由拦截、会话管理、欢迎页、历史消息和流式对话。登录态当前保存在浏览器 localStorage，后续计划迁移到 Pinia。
-- 前端 API 层保持统一业务入口：Axios 负责普通 REST 请求，Fetch 负责 SSE 流式对话；两者共享 JWT、错误处理和登录态失效处理。
-- 数据导入暂时采用简单约定：用户在表格首行填写完整站点名称。复杂的站点匹配预览、未匹配禁止自动建站和二次确认暂缓实现。
-- 当前系统面向个人项目和小规模生产交付，暂未引入 Pinia 全局状态、消息队列、分布式任务调度和完整可观测平台。
-- 阿里云模型接口偶发连接失败时，需要结合网络、TLS、代理和上游服务状态排查，不应仅通过增加 Agent 重试次数掩盖问题。
+## 当前限制与待完成
 
-## 待完成功能
+1. **前端文件上传**：后端已经可以从指定路径导入发电量文件，前端尚未实现文件选择、上传、预览和导入进度。
+2. **生成文件下载**：后端能够生成文件，尚未提供完整的前端文件列表和安全下载接口。
+3. **用户与站点权限**：目前只有基础用户角色字段，尚未完成系统管理员、运维人员和可访问站点范围的权限模型。
+4. **站点仪表盘**：当前以自然语言工作台为主，尚未实现传统筛选条件式的数据查询页面。
+5. **前端状态管理**：Access Token、用户和主要工作台状态尚未迁移到 Pinia。
+6. **前端模块拆分**：`App.vue` 仍承担较多会话、认证和流式状态逻辑，需要继续拆分为页面、组件和组合式函数。
+7. **Redis 缓存**：站点目录、会话列表和热点历史记录尚未接入 Redis；MySQL 仍是当前持久化数据源。
+8. **历史会话性能**：已经完成游标分页和按页加载，后续还需增加请求缓存、图表按需加载和前端渲染优化。
+9. **文件工具产品化**：当前文件导入、导出和验证能力主要供 Agent 与后端调用，尚未形成完整前端闭环。
+10. **部署与可观测性**：尚未补齐 Docker、后台任务队列、指标监控、链路追踪和接口限流。
 
-以下事项属于当前版本明确的产品化待办。后端已有能力的部分保留现有接口和服务，后续重点是补齐前端接入、权限模型和工程拆分。
+## 相关文档
 
-1. **站点数据文件的前端导入**
-   - 当前状态：后端已支持从指定路径读取和导入文件。
-   - 待完成：前端文件选择、上传、导入进度、预览和结果反馈，并接入统一 API 层。
-
-2. **生成文件的前端展示与下载**
-   - 当前状态：后端已支持将报告、表格等文件生成到指定路径。
-   - 待完成：前端展示生成结果，提供安全的文件查询和下载接口，避免直接暴露服务器文件路径。
-
-3. **用户管理和角色权限**
-   - 当前状态：已具备基础用户认证和 JWT 登录态。
-   - 待完成：区分站点运维人员和系统管理员，增加角色、站点范围、菜单权限和接口级权限控制。
-
-4. **登录状态自动延续与过期处理**
-   - 当前状态：登录态使用 JWT 并暂存于浏览器 `localStorage`；Token 到期后目前不能无感续期，也不能完整覆盖所有过期场景。
-   - 待完成：引入 `refreshToken`，在访问令牌即将过期时自动续期；刷新失败或用户登录态确实失效后，统一清理状态并自动跳转 `/login`。
-
-5. **站点传统仪表盘**
-   - 当前状态：站点查询主要通过自然语言 Agent 完成。
-   - 待完成：提供传统系统式查询入口，支持站点、日期、数据来源、时间粒度等条件筛选，直接查看原始发电量、气象和预测数据，并与自然语言工作台互补。
-
-6. **前端模块化拆分**
-   - 当前状态：Vue 工作台已独立，但部分会话、流式事件、图表和页面状态仍集中在 `App.vue`。
-   - 待完成：按页面、会话、消息流、认证、图表、文件导入等职责拆分组件、组合式函数和状态模块，降低维护成本。
-
-7. **会话切换和历史消息加载性能**
-   - 当前状态：已支持会话列表和历史消息恢复，但会话切换时仍可能出现加载等待。
-   - 待完成：增加消息分页、最近会话摘要、请求取消与缓存、历史图表快照按需加载，降低会话切换延迟。
-
-## 后续产品化方向
-
-1. 完成上述待办中的文件导入、文件下载和登录续期闭环。
-2. 将登录态、当前用户和会话状态迁移到 Pinia，保留统一 API 层。
-3. 完善 Agent 执行状态协议，展示“思考 -> 工具调用 -> 工具结果 -> 继续思考”的可折叠时间线。
-4. 增加预测结果可信度、模型版本和回测报告。
-5. 完善数据导入预览、站点匹配和重复数据处理（当前复杂校验仍按产品约定暂缓）。
-6. 增加日志、指标、链路追踪、接口限流和内容安全策略（如 CSP）。
-7. 增加 Docker 部署、定时预测和后台任务能力。
-8. 建立工具调用评测集，持续评估日期解析、站点识别、预测准确率和任务完成率。
-## 学习文档
-
+- [图表能力架构](docs/图表能力.md)
+- [站点结构化解析与会话级记忆复盘](docs/站点结构化解析与会话级记忆复盘.md)
+- [性能优化记录](docs/性能优化记录.md)
+- [JWT 刷新令牌与活跃续期](docs/JWT刷新令牌与活跃续期.md)
+- [SSE 流式输出与会话锁](docs/SSE-流式输出-与-会话锁-设计亮点.md)
+- [Vite 开发模式与生产模式性能差异](docs/Vite开发模式与生产模式性能差异.md)
 - [项目全景评估与优化路线](docs/2026-07-16-项目全景评估与优化路线.md)
-- [通用图表能力架构与分阶段实施方案](docs/2026-07-16-通用图表能力架构与分阶段实施方案.md)
-- [图表能力架构报告](docs/图表能力.md)
-- [JWT 认证和 AskUser 实现方案](docs/JWT认证和ask_user的实现方案与解答.md)
-- [P1 阶段日报（2026-07-15）](docs/2026-07-15-P1阶段日报.md)
-- [开发日报（2026-07-16）](docs/2026-07-16-开发日报.md)
-- [SSE 流式输出与会话锁设计亮点](docs/SSE-流式输出-与-会话锁-设计亮点.md)
-- [一阶段完成内容文档](docs/一阶段完成内容文档.md)
-
-### 图表历史快照迁移
-
-为恢复历史会话中的 ECharts 图表，需要执行 `backend/sql/migrations/003_chart_snapshot_store.sql`，创建结构化图表快照表。该表与 LangChain 的 `message_store` 分离，保存的是可校验的图表数据描述，而不是前端代码或图片。
 
 ## 仓库地址
 

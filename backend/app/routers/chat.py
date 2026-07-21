@@ -13,9 +13,14 @@ from backend.app.services.agent_manager import agent_manager
 from backend.app.routers.sessions import _verify_session_ownership, ensure_session_title
 from backend.app.services.chart_snapshot_store import save_chart_snapshot
 from backend.app.services.summary_task_manager import summary_task_manager
+from backend.app.services.session_context_service import (
+    load_context as load_session_context,
+    save_active_station,
+)
 from backend.app.charting.context import bind_chart_context, reset_chart_context
 from backend.app.services.station_resolver import (
     bind_station_resolution_context,
+    get_station_resolution_context,
     reset_station_resolution_context,
 )
 from backend.app.errors import AppError, ErrorCode, ToolError
@@ -137,6 +142,10 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
 
     executor = agent_manager.get_agent(req.session_id, user_id=user_id)
     bridge = agent_manager.get_or_create_bridge(req.session_id)
+    persisted_context = load_session_context(req.session_id, user_id)
+    active_station = persisted_context.get("active_station")
+    if not isinstance(active_station, dict):
+        active_station = None
 
     # 构建一个异步生成器，逐条发送事件
     async def event_generator():
@@ -156,7 +165,10 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
             # ContextVar 必须在 Agent 执行任务内部绑定，工具线程才能定位当前 session。
             bridge_token = agent_manager.bind_bridge(bridge)
             chart_context_token = bind_chart_context(req.session_id, user_id)
-            station_context_token = bind_station_resolution_context()
+            station_context_token = bind_station_resolution_context(
+                active_station=active_station,
+            )
+            task_succeeded = False
             try:
                 # 异步读取 Agent 产生的事件流
                 # astream_events 是一个流式事件接口，可能会产生 token、工具调用、问题、完成等事件
@@ -182,12 +194,31 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
                 if chart_specs:
                     # 如果有图表数据，异步保存图表快照到持久化存储
                     await asyncio.to_thread(save_chart_snapshot, req.session_id, user_id, chart_specs)
+                task_succeeded = True
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 await queue.put(("error", _agent_error_event(exc)))
             finally:
                 # 解绑 ContextVar，避免泄漏
+                if task_succeeded:
+                    context = get_station_resolution_context()
+                    selected_station = (
+                        context.last_user_selected_station
+                        if context is not None
+                        else None
+                    )
+                    if selected_station:
+                        try:
+                            await asyncio.to_thread(
+                                save_active_station,
+                                req.session_id,
+                                user_id,
+                                selected_station,
+                            )
+                        except Exception:
+                            # 会话上下文是辅助记忆，保存失败不应覆盖已完成的任务。
+                            logger.exception("保存会话级站点上下文失败")
                 agent_manager.reset_bridge(bridge_token)
                 reset_chart_context(chart_context_token)
                 reset_station_resolution_context(station_context_token)
@@ -241,12 +272,37 @@ async def chat(req: ChatRequest, current_user: dict = Depends(get_current_user))
     ensure_session_title(req.session_id, user_id, req.message)
 
     executor = agent_manager.get_agent(req.session_id, user_id=user_id)
+    persisted_context = load_session_context(req.session_id, user_id)
+    active_station = persisted_context.get("active_station")
+    if not isinstance(active_station, dict):
+        active_station = None
     chart_context_token = bind_chart_context(req.session_id, user_id)
-    station_context_token = bind_station_resolution_context()
+    station_context_token = bind_station_resolution_context(
+        active_station=active_station,
+    )
+    task_succeeded = False
     try:
         async with lock:
             result = await asyncio.to_thread(executor.invoke, {"input": req.message})
+            task_succeeded = True
     finally:
+        if task_succeeded:
+            context = get_station_resolution_context()
+            selected_station = (
+                context.last_user_selected_station
+                if context is not None
+                else None
+            )
+            if selected_station:
+                try:
+                    await asyncio.to_thread(
+                        save_active_station,
+                        req.session_id,
+                        user_id,
+                        selected_station,
+                    )
+                except Exception:
+                    logger.exception("保存会话级站点上下文失败")
         reset_chart_context(chart_context_token)
         reset_station_resolution_context(station_context_token)
     summary_task_manager.schedule(req.session_id, executor.memory)

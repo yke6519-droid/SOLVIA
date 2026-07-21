@@ -170,6 +170,7 @@ async def refresh(
         )
 
     try:
+        # 解析refreshToken，验证其有效性和过期时间
         payload = decode_refresh_token(refresh_token)
     except jwt.ExpiredSignatureError as exc:
         raise _refresh_auth_error(
@@ -185,7 +186,7 @@ async def refresh(
             "刷新登录状态失败，请重新登录",
             status_code=status.HTTP_401_UNAUTHORIZED,
         ) from exc
-
+    # 验证refreshToken是否在数据库中存在
     user = get_user_by_id(int(payload["sub"]))
     if not user:
         raise _refresh_auth_error(
@@ -207,6 +208,7 @@ async def refresh(
         user,
         expires_at=expires_at,
     )
+
     rotate_refresh_session(
         token_id=str(payload["jti"]),
         token_hash=hash_refresh_token(refresh_token),
@@ -215,7 +217,9 @@ async def refresh(
         new_token_hash=hash_refresh_token(new_refresh_token),
         expires_at=expires_at,
     )
+
     access_token, expires_in = create_access_token(user)
+    
     _set_refresh_cookie(response, new_refresh_token, expires_at)
     return AuthResponse(
         access_token=access_token,

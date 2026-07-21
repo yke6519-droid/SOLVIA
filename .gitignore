@@ -19,4 +19,4 @@ frontend/dist/
 .idea/inspectionProfiles/profiles_settings.xml
 backend/temp/file/
 backend/tests/__init__.py
-backend/tests/test_charting.py
+backend/tests/

@@ -503,6 +503,7 @@ def build_memory(
     from langchain_community.chat_message_histories import SQLChatMessageHistory
     from backend.app.database import get_engine
     # 使用自定义 converter, 让中文以原文存储 (非 \uXXXX 转义), 同时携带 user_id
+    
     chat_memory = SQLChatMessageHistory(
         session_id=session_id,
         connection=get_engine(),

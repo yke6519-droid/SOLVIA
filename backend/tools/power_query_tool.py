@@ -86,6 +86,8 @@ def _query_station_by_name(station_name: str = None) -> dict:
             "lon": lon,
             "capacity_kw": capacity,
             "location": r["location"] or "",
+            "province": r["province"] or "",
+            "city": r["city"] or "",
         }
 
     print(f"📋 从数据库加载 {len(stations)} 个站点: {list(stations.keys())}")
@@ -96,6 +98,74 @@ def _query_station_by_name(station_name: str = None) -> dict:
         matched = _match_station(station_name, stations)
         return matched if matched else {}
 
+    return stations
+
+
+def _query_stations_by_region(
+    *,
+    region_keyword: str,
+    limit: int | None = None,
+) -> list[dict]:
+    """Query all active stations matching a region keyword.
+
+    This is deliberately a database-level collection query.  It does not go
+    through ``_match_station`` because a region is a requested set of sites,
+    not an ambiguous single-site name that needs user selection.
+    """
+    keyword = str(region_keyword or "").strip()
+    if not keyword:
+        raise ValueError("region_keyword is required")
+
+    engine = get_engine()
+    params: dict[str, object] = {"region_pattern": f"%{keyword}%"}
+
+    limit_clause = " LIMIT :limit" if limit is not None else ""
+    if limit is not None:
+        params["limit"] = int(limit)
+
+    query = text(
+        "SELECT id, name, capacity_kw, province, city, location, "
+        "longitude, latitude "
+        "FROM solar_station "
+        "WHERE status = 1 "
+        "AND (province LIKE :region_pattern "
+        "OR city LIKE :region_pattern "
+        "OR location LIKE :region_pattern "
+        "OR name LIKE :region_pattern) "
+        + " ORDER BY id"
+        + limit_clause
+    )
+
+    with engine.connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+
+    stations: list[dict] = []
+    for row in rows:
+        item = row._mapping
+        stations.append(
+            {
+                "station_id": str(item["id"]),
+                "name": item["name"],
+                "capacity_kw": (
+                    float(item["capacity_kw"])
+                    if item["capacity_kw"] is not None
+                    else None
+                ),
+                "province": item["province"] or "",
+                "city": item["city"] or "",
+                "location": item["location"] or "",
+                "lat": (
+                    float(item["latitude"])
+                    if item["latitude"] is not None
+                    else None
+                ),
+                "lon": (
+                    float(item["longitude"])
+                    if item["longitude"] is not None
+                    else None
+                ),
+            }
+        )
     return stations
 
 

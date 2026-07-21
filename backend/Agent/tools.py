@@ -22,11 +22,13 @@ from backend.tools.date_parser_tool import parse_date
 from backend.tools.ask_user_tool import ask_user
 from backend.tools.chart_plan_tool import get_power_dataset, create_chart_plan, get_chart_capabilities
 from backend.tools.import_tool import import_power_data
+from backend.app.services.station_scope import get_stations_by_region
 
 ALL_TOOLS = [
     # 站点查询类
     get_station_location,
     get_station_info,
+    get_stations_by_region,
     # 时间查询类
     get_current_datetime,
     parse_date,
