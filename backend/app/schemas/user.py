@@ -37,3 +37,9 @@ class AuthResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     user: UserResponse
+
+
+class LogoutResponse(BaseModel):
+    """注销响应。"""
+
+    message: str = "已退出登录"

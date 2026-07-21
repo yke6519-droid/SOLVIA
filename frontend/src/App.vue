@@ -9,9 +9,12 @@ import {
   createSession as createSessionApi,
   deleteSession as deleteSessionApi,
   getSessionMessages,
+  getAuthRefreshLeadMs,
   getStoredAuth,
   listSessions,
+  logout as logoutApi,
   renameSession as renameSessionApi,
+  refreshAccessToken,
   replyToQuestion,
   streamChat,
 } from './api'
@@ -53,7 +56,12 @@ const statusLabel = computed(() => (pendingQuestion.value ? 'Waiting for reply' 
 const displayName = computed(() => currentUser.value?.display_name || currentUser.value?.username || 'User')
 let toastTimer = null
 let authExpiryTimer = null
+let authIdleTimer = null
 let historyRequestId = 0
+let lastAuthActivityAt = 0
+let pageWasHidden = false
+let windowWasBlurred = false
+const AUTH_ACTIVE_WINDOW_MS = 30 * 60 * 1000
 
 function updateThemeMeta(nextTheme) {
   const meta = document.querySelector('meta[name="theme-color"]')
@@ -700,6 +708,9 @@ function resultMetrics(chartData) {
 
 function handleAuthenticated(user) {
   currentUser.value = user
+  // Login and automatic bootstrap requests are not evidence of continued use.
+  // Only a later explicit browser interaction grants refresh eligibility.
+  lastAuthActivityAt = 0
   scheduleAuthExpiryCheck()
   showToast('欢迎回来，' + (user.display_name || user.username))
   loadSessions()
@@ -707,6 +718,11 @@ function handleAuthenticated(user) {
 
 function handleAuthExpired() {
   stopStreaming()
+  if (authExpiryTimer) window.clearTimeout(authExpiryTimer)
+  authExpiryTimer = null
+  if (authIdleTimer) window.clearTimeout(authIdleTimer)
+  authIdleTimer = null
+  lastAuthActivityAt = 0
   currentUser.value = null
   activeSessionId.value = ''
   sessions.value = []
@@ -714,16 +730,108 @@ function handleAuthExpired() {
   if (!isLoginRoute.value) authExpiredModalVisible.value = true
 }
 
-function scheduleAuthExpiryCheck() {
+function isAuthSessionActive() {
+  return lastAuthActivityAt > 0 && Date.now() - lastAuthActivityAt <= AUTH_ACTIVE_WINDOW_MS
+}
+
+function recordAuthActivity() {
+  if (!currentUser.value || isLoginRoute.value) return
+  const auth = getStoredAuth({ allowExpired: true })
+  if (!auth?.access_token) return
+
+  const wasActive = isAuthSessionActive()
+  if (!wasActive && auth.expires_at && auth.expires_at <= Date.now()) {
+    // The user returned after both the idle window and Access Token expiry.
+    // Do not renew an abandoned session merely because the page regained focus.
+    handleAuthExpired()
+    return
+  }
+  lastAuthActivityAt = Date.now()
+  scheduleAuthIdleTimeout()
+  void refreshAuthIfNeeded()
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'hidden') {
+    pageWasHidden = true
+    return
+  }
+  if (pageWasHidden) {
+    pageWasHidden = false
+    recordAuthActivity()
+  }
+}
+
+function handleWindowBlur() {
+  windowWasBlurred = true
+}
+
+function handleWindowFocus() {
+  if (!windowWasBlurred) return
+  windowWasBlurred = false
+  recordAuthActivity()
+}
+
+function scheduleAuthIdleTimeout() {
+  if (authIdleTimer) window.clearTimeout(authIdleTimer)
+  authIdleTimer = null
+  if (!currentUser.value || !lastAuthActivityAt) return
+
+  const delay = Math.max(0, AUTH_ACTIVE_WINDOW_MS - (Date.now() - lastAuthActivityAt))
+  authIdleTimer = window.setTimeout(() => {
+    authIdleTimer = null
+    if (Date.now() - lastAuthActivityAt >= AUTH_ACTIVE_WINDOW_MS) {
+      handleAuthExpired()
+      return
+    }
+    scheduleAuthIdleTimeout()
+  }, delay + 50)
+}
+
+async function refreshAuthIfNeeded() {
+  const auth = getStoredAuth({ allowExpired: true })
+  if (!auth?.access_token) {
+    handleAuthExpired()
+    return
+  }
+  if (!isAuthSessionActive()) {
+    scheduleAuthExpiryCheck({ atExpiry: true })
+    return
+  }
+  if (auth.expires_at && auth.expires_at - Date.now() > getAuthRefreshLeadMs(auth)) {
+    scheduleAuthExpiryCheck()
+    return
+  }
+  try {
+    const refreshed = await refreshAccessToken()
+    currentUser.value = refreshed.user
+    scheduleAuthExpiryCheck()
+  } catch {
+    // api.js has cleared local state and emitted the auth-expired event.
+  }
+}
+
+function scheduleAuthExpiryCheck({ atExpiry = false } = {}) {
   if (authExpiryTimer) window.clearTimeout(authExpiryTimer)
   authExpiryTimer = null
 
-  const auth = getStoredAuth()
+  const auth = getStoredAuth({ allowExpired: true })
   if (!auth?.expires_at) return
-  const delay = Math.max(0, auth.expires_at - Date.now()) + 100
+  const remaining = auth.expires_at - Date.now()
+  if (remaining <= 0) {
+    if (isAuthSessionActive()) void refreshAuthIfNeeded()
+    else handleAuthExpired()
+    return
+  }
+
+  const delay = atExpiry ? remaining : Math.max(0, remaining - getAuthRefreshLeadMs(auth))
   authExpiryTimer = window.setTimeout(() => {
     authExpiryTimer = null
-    if (!getStoredAuth() && !isLoginRoute.value) handleAuthExpired()
+    if (atExpiry && !isAuthSessionActive()) {
+      handleAuthExpired()
+      return
+    }
+    void refreshAuthIfNeeded()
   }, delay)
 }
 
@@ -732,9 +840,19 @@ function goToLoginAfterAuthExpired() {
   router.replace('/login')
 }
 
-function logout() {
+async function logout() {
   stopStreaming()
+  try {
+    await logoutApi()
+  } catch {
+    // Local logout still takes effect when the backend cannot be reached.
+  }
   clearAuth()
+  if (authExpiryTimer) window.clearTimeout(authExpiryTimer)
+  authExpiryTimer = null
+  if (authIdleTimer) window.clearTimeout(authIdleTimer)
+  authIdleTimer = null
+  lastAuthActivityAt = 0
   currentUser.value = null
   sessions.value = []
   messages.value = []
@@ -751,7 +869,15 @@ function scrollToBottom() {
 
 onMounted(() => {
   window.addEventListener('solar-agent-auth-expired', handleAuthExpired)
+  window.addEventListener('solar-agent-auth-refreshed', scheduleAuthExpiryCheck)
+  window.addEventListener('pointerdown', recordAuthActivity, { passive: true })
+  window.addEventListener('keydown', recordAuthActivity)
+  window.addEventListener('touchstart', recordAuthActivity, { passive: true })
+  window.addEventListener('blur', handleWindowBlur)
+  window.addEventListener('focus', handleWindowFocus)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
   if (currentUser.value && !isLoginRoute.value) {
+    lastAuthActivityAt = 0
     scheduleAuthExpiryCheck()
     loadSessions()
   }
@@ -759,9 +885,17 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('solar-agent-auth-expired', handleAuthExpired)
+  window.removeEventListener('solar-agent-auth-refreshed', scheduleAuthExpiryCheck)
+  window.removeEventListener('pointerdown', recordAuthActivity)
+  window.removeEventListener('keydown', recordAuthActivity)
+  window.removeEventListener('touchstart', recordAuthActivity)
+  window.removeEventListener('blur', handleWindowBlur)
+  window.removeEventListener('focus', handleWindowFocus)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
   if (abortController.value) abortController.value.abort()
   if (toastTimer) window.clearTimeout(toastTimer)
   if (authExpiryTimer) window.clearTimeout(authExpiryTimer)
+  if (authIdleTimer) window.clearTimeout(authIdleTimer)
 })
 </script>
 
@@ -775,10 +909,11 @@ onBeforeUnmount(() => {
           <div class="brand-mark"><span></span><span></span><span></span></div>
           <div>
             <div class="brand-name">SOLARAGENT</div>
-            <div class="brand-caption">光伏运营指挥台</div>
+            <!-- <div class="brand-caption">光伏运营指挥台</div> -->
+            <div class="brand-caption">自然语言驱动的光伏任务工作台</div>
           </div>
         </div>
-        <div class="topbar-center">自然语言驱动的光伏任务工作台</div>
+        <div class="topbar-center"> </div>
         <div class="user-menu">
           <span class="status-dot"></span><span>{{ statusLabel }}</span>
           <button class="theme-toggle" type="button" :aria-label="theme === 'dark' ? '切换浅色模式' : '切换深色模式'" :aria-pressed="theme === 'light'" @click="toggleTheme">
@@ -870,7 +1005,7 @@ onBeforeUnmount(() => {
 
           <div class="composer-wrap">
             <div class="composer"><button class="composer-add" type="button" aria-label="添加文件" @click="showToast('文件导入将在后续版本接入')">+</button><input ref="composerInput" v-model="input" type="text" placeholder="告诉我你想完成的光伏任务" :disabled="isStreaming || Boolean(pendingQuestion)" @keydown.enter="sendMessage" /><button v-if="isStreaming" class="stop-button" type="button" @click="stopStreaming">停止</button><button v-else class="send-button" type="button" aria-label="发送消息" @click="sendMessage">↗</button></div>
-            <div class="composer-foot"><span>SolarAgent 可能需要你确认关键业务条件</span><span>Enter 发送</span></div>
+            <!-- <div class="composer-foot"><span>SolarAgent 可能需要你确认关键业务条件</span><span>Enter 发送</span></div> -->
           </div>
         </main>
       </div>

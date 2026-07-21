@@ -17,10 +17,6 @@ frontend/dist/
 .gitignore
 .idea/vcs.xml
 .idea/inspectionProfiles/profiles_settings.xml
-backend/temp/file/英杰_清水_202606辐射发电相关性分析.md
-backend/temp/file/英杰_vs_哲丰_5月对比报告.md
-backend/temp/file/英杰7月3日预测vs实际对比.md
-backend/temp/file/哲丰新材料清水站2026年6月发电分析报告.md
-backend/temp/file/哲丰一车间_英杰_20260610-20260616_对比.xlsx
+backend/temp/file/
 backend/tests/__init__.py
 backend/tests/test_charting.py

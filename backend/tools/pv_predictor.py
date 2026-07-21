@@ -1120,9 +1120,8 @@ def predict_power(
         artifact: 预测结果 DataFrame（24行，列: time, hour, xgb, lgb, lstm, lstnet, fusion）
                   可供文件读写工具保存为 Excel。
     """
-    from backend.tools.weather_fetcher_tool import (
-        get_station_location, _load_stations_from_db, _match_station
-    )
+    from backend.tools.weather_fetcher_tool import _load_stations_from_db
+    from backend.app.services.station_resolver import resolve_station
 
     # 【日期解析】支持 YYYY-MM-DD / M月D日 / M月D号 / M-D / 今天 / 昨天 等格式
     predict_date = parse_flexible_date(target_date)
@@ -1131,13 +1130,11 @@ def predict_power(
 
     print(f"\n 日期解析: target_date='{target_date}' → predict_date={predict_date}, history_date={history_date}")
 
-    # 【步骤1】查站点经纬度
+    # 【步骤1】只解析一次站点。解析器会在当前任务复用用户的选择，
+    # 返回 station_id、全名、经纬度等结构化信息，避免文本工具再次匹配。
     print(f"\n🔍 查询站点信息: {station_name}")
-    location_str = get_station_location.invoke({"station_name": station_name})
-
-    # 从数据库查站点信息（get_station_location 返回的是文字摘要，这里需要结构化数据）
     stations = _load_stations_from_db()
-    station_info = _match_station(station_name, stations)
+    station_info = resolve_station(station_name, stations=stations)
 
     if station_info is None:
         raise ToolException(f"未找到站点: '{station_name}'")

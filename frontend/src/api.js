@@ -4,6 +4,9 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, ''
 const TOKEN_KEY = 'solar-agent-access-token'
 const USER_KEY = 'solar-agent-user'
 const EXPIRES_KEY = 'solar-agent-token-expires-at'
+const TOKEN_LIFETIME_KEY = 'solar-agent-token-lifetime-ms'
+export const AUTH_REFRESH_LEAD_MS = 60 * 1000
+let refreshPromise = null
 
 export class ApiError extends Error {
   constructor(message, status = 0, options = {}) {
@@ -20,12 +23,14 @@ export class ApiError extends Error {
 const publicClient = axios.create({
   baseURL: API_BASE,
   timeout: 15000,
+  withCredentials: true,
   headers: { 'Content-Type': 'application/json' },
 })
 
 const authClient = axios.create({
   baseURL: API_BASE,
   timeout: 30000,
+  withCredentials: true,
   headers: { 'Content-Type': 'application/json' },
 })
 
@@ -40,9 +45,21 @@ authClient.interceptors.request.use((config) => {
 
 authClient.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response?.status === 401) handleAuthExpired()
-    return Promise.reject(error)
+  async (error) => {
+    const originalRequest = error.config || {}
+    const canRetry = error.response?.status === 401 && !originalRequest._authRetried
+    if (!canRetry) return Promise.reject(error)
+
+    originalRequest._authRetried = true
+    try {
+      await refreshAccessToken()
+      originalRequest.headers = originalRequest.headers || {}
+      originalRequest.headers.Authorization = `Bearer ${getAccessToken()}`
+      return authClient.request(originalRequest)
+    } catch (refreshError) {
+      handleAuthExpired()
+      return Promise.reject(refreshError)
+    }
   },
 )
 
@@ -80,7 +97,6 @@ async function parseResponseError(response, fallback) {
   } catch {
     // 非 JSON 错误响应使用默认提示
   }
-  if (response.status === 401) handleAuthExpired()
   return new ApiError(detail, response.status, {
     code: errorInfo.code,
     retryable: errorInfo.retryable,
@@ -113,18 +129,22 @@ export function saveAuth(auth) {
   window.localStorage.setItem(TOKEN_KEY, auth.access_token)
   window.localStorage.setItem(USER_KEY, JSON.stringify(auth.user))
   window.localStorage.setItem(EXPIRES_KEY, String(expiresAt))
+  window.localStorage.setItem(TOKEN_LIFETIME_KEY, String(expiresIn * 1000))
 }
 
 export function clearAuth() {
   window.localStorage.removeItem(TOKEN_KEY)
   window.localStorage.removeItem(USER_KEY)
   window.localStorage.removeItem(EXPIRES_KEY)
+  window.localStorage.removeItem(TOKEN_LIFETIME_KEY)
 }
 
-export function getStoredAuth() {
+export function getStoredAuth(options = {}) {
+  const allowExpired = Boolean(options.allowExpired)
   const token = window.localStorage.getItem(TOKEN_KEY)
   const expiresAt = Number(window.localStorage.getItem(EXPIRES_KEY) || 0)
-  if (!token || (expiresAt && expiresAt <= Date.now())) {
+  const lifetimeMs = Number(window.localStorage.getItem(TOKEN_LIFETIME_KEY) || 0)
+  if (!token || (!allowExpired && expiresAt && expiresAt <= Date.now())) {
     clearAuth()
     return null
   }
@@ -140,18 +160,77 @@ export function getStoredAuth() {
     clearAuth()
     return null
   }
-  return { access_token: token, user, expires_at: expiresAt || null }
+  return {
+    access_token: token,
+    user,
+    expires_at: expiresAt || null,
+    lifetime_ms: Number.isFinite(lifetimeMs) && lifetimeMs > 0 ? lifetimeMs : null,
+    is_expired: Boolean(expiresAt && expiresAt <= Date.now()),
+  }
 }
 
 export function getAccessToken() {
   return getStoredAuth()?.access_token || ''
 }
 
-export async function apiFetch(path, options = {}) {
-  if (!getAccessToken()) {
+export function getAuthRefreshLeadMs(auth = getStoredAuth({ allowExpired: true })) {
+  if (!auth?.expires_at) return AUTH_REFRESH_LEAD_MS
+  const remaining = Math.max(0, auth.expires_at - Date.now())
+  const lifetime = auth.lifetime_ms || Math.max(remaining * 2, 1000)
+  return Math.min(AUTH_REFRESH_LEAD_MS, Math.max(1000, Math.floor(lifetime * 0.2)))
+}
+
+function shouldRefreshAccessToken() {
+  const auth = getStoredAuth({ allowExpired: true })
+  if (!auth?.expires_at) return false
+  return auth.expires_at - Date.now() <= getAuthRefreshLeadMs(auth)
+}
+
+export async function refreshAccessToken() {
+  if (refreshPromise) return refreshPromise
+
+  refreshPromise = (async () => {
+    try {
+      const { data } = await publicClient.post('/auth/refresh', {})
+      if (!data?.access_token || !data?.user) {
+        throw new ApiError('续期响应缺少必要的凭证信息', 502, { code: 'AUTH_RESPONSE_INVALID' })
+      }
+      saveAuth(data)
+      window.dispatchEvent(new CustomEvent('solar-agent-auth-refreshed', { detail: data.user }))
+      return data
+    } catch (error) {
+      const normalized = normalizeAxiosError(error, '登录状态续期失败，请重新登录')
+      handleAuthExpired()
+      throw normalized
+    } finally {
+      refreshPromise = null
+    }
+  })()
+
+  return refreshPromise
+}
+
+export async function ensureFreshAccessToken() {
+  const auth = getStoredAuth({ allowExpired: true })
+  if (!auth?.access_token) {
     handleAuthExpired()
     throw new ApiError('登录状态已失效，请重新登录', 401, { code: 'AUTH_REQUIRED' })
   }
+  if (shouldRefreshAccessToken()) return refreshAccessToken()
+  return auth
+}
+
+export async function logout() {
+  try {
+    await publicClient.post('/auth/logout', {})
+  } catch (error) {
+    // The local state must still be cleared even if the server is unreachable.
+    throw normalizeAxiosError(error, '退出登录请求失败')
+  }
+}
+
+export async function apiFetch(path, options = {}) {
+  await ensureFreshAccessToken()
 
   const method = (options.method || 'GET').toLowerCase()
   let data = options.body
@@ -219,16 +298,10 @@ export async function replyToQuestion(sessionId, answer) {
  * 普通接口统一走 Axios；流式接口使用 Fetch 是为了直接消费 ReadableStream。
  */
 export async function streamChat({ sessionId, message, signal, onEvent }) {
-  if (!getAccessToken()) {
-    handleAuthExpired()
-    throw new ApiError('登录状态已失效，请重新登录', 401, { code: 'AUTH_REQUIRED' })
-  }
-
-  let response
-  try {
-    response = await fetch(`${API_BASE}/chat/stream`, {
+  const openStream = async () => fetch(`${API_BASE}/chat/stream`, {
       method: 'POST',
       signal,
+      credentials: 'include',
       headers: {
         Accept: 'text/event-stream',
         'Content-Type': 'application/json',
@@ -236,13 +309,31 @@ export async function streamChat({ sessionId, message, signal, onEvent }) {
       },
       body: JSON.stringify({ session_id: sessionId, message }),
     })
+
+  let response
+  try {
+    await ensureFreshAccessToken()
+    response = await openStream()
   } catch (error) {
     if (error.name === 'AbortError') throw error
+    if (error instanceof ApiError) throw error
     throw new ApiError('暂时无法连接后端服务，请确认 FastAPI 已启动在 8001 端口', 0)
   }
 
+  if (response.status === 401) {
+    try {
+      await refreshAccessToken()
+      response = await openStream()
+    } catch (error) {
+      if (error.name === 'AbortError') throw error
+      if (error instanceof ApiError) throw error
+      throw new ApiError('登录状态续期失败，请重新登录', 401, { code: 'AUTH_REQUIRED' })
+    }
+  }
   if (!response.ok) {
-    throw await parseResponseError(response, '流式对话请求失败')
+    const error = await parseResponseError(response, '流式对话请求失败')
+    if (error.status === 401) handleAuthExpired()
+    throw error
   }
   if (!response.body) throw new ApiError('后端未返回可读取的流式响应')
 

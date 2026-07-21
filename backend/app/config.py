@@ -44,7 +44,10 @@ class Settings(BaseSettings):
     ask_user_timeout: int = 120
 
     jwt_secret_key: str = ""
-    jwt_access_token_expire_seconds: int = 3600
+    # Authentication session policy. Values can be overridden through .env.
+    jwt_access_token_expire_seconds: int = 900
+    jwt_refresh_token_expire_seconds: int = 7 * 24 * 60 * 60
+    jwt_refresh_cookie_secure: bool = False
 
 
 settings = Settings()

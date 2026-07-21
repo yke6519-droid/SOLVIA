@@ -142,49 +142,11 @@ def _match_station(station_name: str, stations: dict) -> dict:
     返回:
         dict: 匹配到的站点信息，未匹配返回 None
     """
-    matches = _match_all_stations(station_name, stations)
+    # Ambiguity handling and task-local caching live in the shared resolver.
+    # This keeps every caller consistent and avoids choosing a station twice.
+    from backend.app.services.station_resolver import resolve_station
 
-    if len(matches) == 0:
-        return None
-    elif len(matches) == 1:
-        return matches[0]
-
-    # 多个匹配，让用户选择
-    from backend.tools.ask_user_tool import ask_user
-
-    options = []
-    for i, info in enumerate(matches, 1):
-        options.append(
-            f"  {i}. {info['name']} (ID:{info['station_id']}, "
-            f"位置:{info.get('location', '未知')})"
-        )
-
-    question = (
-        f"找到 {len(matches)} 个匹配站点，请选择:\n"
-        + "\n".join(options)
-        + f"\n请输入序号 (1-{len(matches)})"
-    )
-
-    print(f"⚠️ '{station_name}' 匹配到 {len(matches)} 个站点，需要用户选择:")
-    for opt in options:
-        print(opt)
-
-    answer = ask_user.invoke({"question": question})
-    # answer 格式: "用户回复: X"
-    reply = answer.replace("用户回复:", "").strip()
-
-    try:
-        idx = int(reply) - 1
-        if 0 <= idx < len(matches):
-            chosen = matches[idx]
-            print(f"✅ 用户选择了: {chosen['name']}")
-            return chosen
-        else:
-            print(f"⚠️ 序号超出范围，默认返回第一个匹配: {matches[0]['name']}")
-            return matches[0]
-    except ValueError:
-        print(f"⚠️ 无效输入 '{reply}'，默认返回第一个匹配: {matches[0]['name']}")
-        return matches[0]
+    return resolve_station(station_name, stations=stations)
 
 # ============================================================
 # 内部工具函数（非 Tool，供 Tool 内部调用）

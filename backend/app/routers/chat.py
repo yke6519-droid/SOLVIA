@@ -14,6 +14,10 @@ from backend.app.routers.sessions import _verify_session_ownership, ensure_sessi
 from backend.app.services.chart_snapshot_store import save_chart_snapshot
 from backend.app.services.summary_task_manager import summary_task_manager
 from backend.app.charting.context import bind_chart_context, reset_chart_context
+from backend.app.services.station_resolver import (
+    bind_station_resolution_context,
+    reset_station_resolution_context,
+)
 from backend.app.errors import AppError, ErrorCode, ToolError
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -141,17 +145,18 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
         # 让桥接器把 Agent 事件发到这个队列
         bridge.attach(queue, asyncio.get_running_loop())
         # 累积最终完整文本结果
-        full_output = ""
+        visible_output = ""
         stream_completed = False
         # 收集工具生成的图表数据
         chart_specs = []
 
         # 接口的“后台执行线程”，负责调用 Agent 并把内部事件放到队列里
         async def consume_agent():
-            nonlocal full_output
+            nonlocal visible_output
             # ContextVar 必须在 Agent 执行任务内部绑定，工具线程才能定位当前 session。
             bridge_token = agent_manager.bind_bridge(bridge)
             chart_context_token = bind_chart_context(req.session_id, user_id)
+            station_context_token = bind_station_resolution_context()
             try:
                 # 异步读取 Agent 产生的事件流
                 # astream_events 是一个流式事件接口，可能会产生 token、工具调用、问题、完成等事件
@@ -171,7 +176,7 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
                                 chart_specs.append(chart_spec)
                         # 如果是 token 事件，累积完整输出
                         if processed[0] == "token":
-                            full_output += processed[1]["content"]
+                            visible_output += processed[1]["content"]
                         # 把处理后的事件放到队列里，供 SSE 生成器发送
                         await queue.put(processed)
                 if chart_specs:
@@ -185,8 +190,9 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
                 # 解绑 ContextVar，避免泄漏
                 agent_manager.reset_bridge(bridge_token)
                 reset_chart_context(chart_context_token)
+                reset_station_resolution_context(station_context_token)
                 # 在队列里放一个“完成”事件，包含最终完整输出
-                await queue.put(("done", {"output": full_output}))
+                await queue.put(("done", {"output": visible_output}))
         # 在锁内启动后台任务，消费 Agent 事件并发送 SSE
         async with lock:
             # 启动后台任务
@@ -236,11 +242,13 @@ async def chat(req: ChatRequest, current_user: dict = Depends(get_current_user))
 
     executor = agent_manager.get_agent(req.session_id, user_id=user_id)
     chart_context_token = bind_chart_context(req.session_id, user_id)
+    station_context_token = bind_station_resolution_context()
     try:
         async with lock:
             result = await asyncio.to_thread(executor.invoke, {"input": req.message})
     finally:
         reset_chart_context(chart_context_token)
+        reset_station_resolution_context(station_context_token)
     summary_task_manager.schedule(req.session_id, executor.memory)
     return {"output": result.get("output", str(result)) if isinstance(result, dict) else str(result)}
 
