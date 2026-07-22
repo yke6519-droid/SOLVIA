@@ -156,16 +156,18 @@ def _read_excel_file(
         raise ToolException(f"不支持的文件格式: {ext}。支持 .xlsx 和 .xls")
 
     xls = pd.ExcelFile(source, engine=engine)
-    sheet_names = xls.sheet_names
 
     results = []
-    for sheet_name in sheet_names:
-        # 读取原始数据(不设表头)获取标题
-        raw = pd.read_excel(source, sheet_name=sheet_name, header=None, engine=engine)
-        title = str(raw.iloc[0, 0]).strip()
+    for sheet_name in xls.sheet_names:
+        # 旧实现对每个 Sheet 调用两次 pd.read_excel：一次取标题、一次取数据。
+        # 多站点文件会重复解析同一个 Sheet，改为通过 ExcelFile.parse 一次读完，
+        # 再拆出标题行、表头行和数据区，减少明显的重复 IO/解析开销。
+        raw = xls.parse(sheet_name=sheet_name, header=None)
+        if raw.empty or raw.shape[0] < 2 or raw.shape[1] == 0:
+            raise ToolException(f"Sheet '{sheet_name}' 内容为空或缺少标题/表头")
 
-        # header=1 读取数据
-        df = pd.read_excel(source, sheet_name=sheet_name, header=1, engine=engine)
+        title = str(raw.iloc[0, 0]).strip()
+        df = raw.iloc[2:].copy().dropna(axis=1, how='all').reset_index(drop=True)
 
         num_cols = len(df.columns)
         if num_cols == 2:

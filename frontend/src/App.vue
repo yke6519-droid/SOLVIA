@@ -4,6 +4,7 @@ import LoginView from './views/LoginView.vue'
 import PowerChart from './components/PowerChart.vue'
 import AskUserCard from './components/AskUserCard.vue'
 import MarkdownMessage from './components/MarkdownMessage.vue'
+import ImportDataDialog from './components/ImportDataDialog.vue'
 import {
   clearAuth,
   createSession as createSessionApi,
@@ -16,6 +17,8 @@ import {
   renameSession as renameSessionApi,
   refreshAccessToken,
   replyToQuestion,
+  previewPowerImport,
+  executePowerImport,
   streamChat,
 } from './api'
 import { useRoute, useRouter } from './router'
@@ -45,6 +48,13 @@ const expandedMessageId = ref(null)
 const activeView = ref('conversation')
 const toast = ref('')
 const authExpiredModalVisible = ref(false)
+const importDialogVisible = ref(false)
+const importFile = ref(null)
+const importFilename = ref('')
+const importPreview = ref(null)
+const importLoading = ref(false)
+const importExecuting = ref(false)
+const importError = ref('')
 const theme = ref(window.localStorage.getItem('solar-agent-theme') || 'dark')
 const messageList = ref(null)
 const composerInput = ref(null)
@@ -413,6 +423,72 @@ async function ensureActiveSession() {
 function useShortcut(text) {
   input.value = text
   nextTick(() => composerInput.value?.focus())
+}
+
+function openImportDialog() {
+  if (isStreaming.value || pendingQuestion.value) {
+    showToast('当前任务正在执行，请完成后再导入文件')
+    return
+  }
+  importDialogVisible.value = true
+  importFile.value = null
+  importFilename.value = ''
+  importPreview.value = null
+  importLoading.value = false
+  importExecuting.value = false
+  importError.value = ''
+}
+
+function closeImportDialog() {
+  if (importLoading.value || importExecuting.value) return
+  importDialogVisible.value = false
+  importFile.value = null
+  importFilename.value = ''
+  importPreview.value = null
+  importLoading.value = false
+  importExecuting.value = false
+  importError.value = ''
+}
+
+function openConversationAttachmentPicker() {
+  if (isStreaming.value || pendingQuestion.value) {
+    showToast('当前任务正在执行，请完成后再添加附件')
+    return
+  }
+  showToast('对话附件功能即将接入，数据入库请使用“导入数据文件”按钮')
+}
+
+async function handleImportFile(file) {
+  importFile.value = file
+  importFilename.value = file.name
+  importPreview.value = null
+  importError.value = ''
+  importLoading.value = true
+  try {
+    const data = await previewPowerImport(file)
+    importPreview.value = data.preview || null
+    if (!importPreview.value) importError.value = '后端没有返回有效的文件预览'
+  } catch (error) {
+    importError.value = errorMessage(error, '文件解析失败，请检查文件格式')
+  } finally {
+    importLoading.value = false
+  }
+}
+
+async function confirmImport() {
+  if (!importFile.value || !importPreview.value || importExecuting.value) return
+  importExecuting.value = true
+  importError.value = ''
+  try {
+    const result = await executePowerImport(importFile.value)
+    importExecuting.value = false
+    closeImportDialog()
+    showToast(`导入完成：新增 ${result.total_inserted || 0} 条，跳过 ${result.total_skipped || 0} 条`)
+  } catch (error) {
+    importError.value = errorMessage(error, '数据入库失败，请稍后重试')
+  } finally {
+    importExecuting.value = false
+  }
 }
 
 function findMessage(messageId) {
@@ -916,6 +992,7 @@ onBeforeUnmount(() => {
         <div class="topbar-center"> </div>
         <div class="user-menu">
           <span class="status-dot"></span><span>{{ statusLabel }}</span>
+          <button class="data-import-button" type="button" @click="openImportDialog">导入数据</button>
           <button class="theme-toggle" type="button" :aria-label="theme === 'dark' ? '切换浅色模式' : '切换深色模式'" :aria-pressed="theme === 'light'" @click="toggleTheme">
             <span class="theme-toggle-mark" aria-hidden="true"></span><span>{{ theme === 'dark' ? '浅色' : '深色' }}</span>
           </button>
@@ -957,7 +1034,7 @@ onBeforeUnmount(() => {
             <div class="shortcut-grid">
               <button class="shortcut-card" type="button" @click="useShortcut('查询英杰站今天的实际发电量')"><span class="shortcut-kicker">实际数据</span><strong>查询发电量</strong><span>按站点和日期获取真实记录</span><span class="shortcut-arrow">↗</span></button>
               <button class="shortcut-card accent" type="button" @click="useShortcut('预测英杰站明天的发电量')"><span class="shortcut-kicker">预测任务</span><strong>预测未来发电</strong><span>确认条件后运行预测模型</span><span class="shortcut-arrow">↗</span></button>
-              <button class="shortcut-card" type="button" @click="useShortcut('导入这份发电量数据文件')"><span class="shortcut-kicker">数据资产</span><strong>导入数据文件</strong><span>预览、清洗并确认入库</span><span class="shortcut-arrow">↗</span></button>
+              <button class="shortcut-card" type="button" @click="openImportDialog"><span class="shortcut-kicker">数据资产</span><strong>导入数据文件</strong><span>预览、清洗并确认入库</span><span class="shortcut-arrow">↗</span></button>
             </div>
           </section>
 
@@ -1004,12 +1081,23 @@ onBeforeUnmount(() => {
           </section>
 
           <div class="composer-wrap">
-            <div class="composer"><button class="composer-add" type="button" aria-label="添加文件" @click="showToast('文件导入将在后续版本接入')">+</button><input ref="composerInput" v-model="input" type="text" placeholder="告诉我你想完成的光伏任务" :disabled="isStreaming || Boolean(pendingQuestion)" @keydown.enter="sendMessage" /><button v-if="isStreaming" class="stop-button" type="button" @click="stopStreaming">停止</button><button v-else class="send-button" type="button" aria-label="发送消息" @click="sendMessage">↗</button></div>
+            <div class="composer"><button class="composer-add" type="button" aria-label="添加对话附件" @click="openConversationAttachmentPicker">+</button><input ref="composerInput" v-model="input" type="text" placeholder="告诉我你想完成的光伏任务" :disabled="isStreaming || Boolean(pendingQuestion)" @keydown.enter="sendMessage" /><button v-if="isStreaming" class="stop-button" type="button" @click="stopStreaming">停止</button><button v-else class="send-button" type="button" aria-label="发送消息" @click="sendMessage">↗</button></div>
             <!-- <div class="composer-foot"><span>SolarAgent 可能需要你确认关键业务条件</span><span>Enter 发送</span></div> -->
           </div>
         </main>
       </div>
     </template>
+    <ImportDataDialog
+      :visible="importDialogVisible"
+      :filename="importFilename"
+      :preview="importPreview"
+      :loading="importLoading"
+      :executing="importExecuting"
+      :error="importError"
+      @close="closeImportDialog"
+      @select-file="handleImportFile"
+      @confirm="confirmImport"
+    />
     <div v-if="toast" class="toast">{{ toast }}</div>
     <div v-if="authExpiredModalVisible" class="auth-expired-backdrop" role="presentation">
       <section class="auth-expired-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-expired-title">

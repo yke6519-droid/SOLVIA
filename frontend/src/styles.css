@@ -120,6 +120,8 @@ button { border: 0; cursor: pointer; }
 .brand-caption { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
 .topbar-center { color: var(--text-muted); font-family: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans SC', 'Segoe UI', sans-serif; font-size: 13px; font-weight: 500; letter-spacing: .08em; }
 .user-menu { justify-content: flex-end; color: var(--text-muted); font-size: 13px; }
+.data-import-button { padding: 6px 11px; color: var(--text-main); border: 1px solid var(--border-subtle); border-radius: 999px; background: var(--surface-soft); font-size: 12px; }
+.data-import-button:hover { color: var(--accent); border-color: var(--accent); background: var(--surface-hover); }
 .status-dot, .footer-dot, .hint-pulse { width: 7px; height: 7px; display: inline-block; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent); }
 .user-divider { width: 1px; height: 20px; background: var(--border-subtle); margin: 0 2px; }
 .user-name { color: var(--text-main); }

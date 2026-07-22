@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.config import settings
-from backend.app.routers import auth, chat, sessions
+from backend.app.routers import auth, chat, import_data, sessions
 from backend.app.services.summary_task_manager import summary_task_manager
 from backend.app.database import dispose_engine
 from backend.app.errors import (
@@ -73,6 +73,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth.router)
     app.include_router(chat.router)
+    app.include_router(import_data.router)
     app.include_router(sessions.router)
 
     @app.get("/")

@@ -286,6 +286,33 @@ export async function renameSession(sessionId, title) {
   })
 }
 
+async function uploadPowerImport(path, file, skipClean = false) {
+  await ensureFreshAccessToken()
+  const formData = new FormData()
+  formData.append('file', file, file.name)
+  formData.append('skip_clean', String(Boolean(skipClean)))
+
+  try {
+    const { data } = await authClient.post(path, formData, {
+      // 浏览器会自动补全 multipart boundary，不要手动拼接 boundary。
+      headers: { 'Content-Type': 'multipart/form-data' },
+      // Excel 预览/入库可能需要较长时间，只放宽导入接口，不影响普通接口。
+      timeout: 180000,
+    })
+    return data
+  } catch (error) {
+    throw normalizeAxiosError(error, '文件导入请求失败')
+  }
+}
+
+export function previewPowerImport(file, options = {}) {
+  return uploadPowerImport('/import/power/preview', file, options.skipClean)
+}
+
+export function executePowerImport(file, options = {}) {
+  return uploadPowerImport('/import/power/execute', file, options.skipClean)
+}
+
 export async function replyToQuestion(sessionId, answer) {
   return apiFetch(`/chat/${encodeURIComponent(sessionId)}/reply`, {
     method: 'POST',
