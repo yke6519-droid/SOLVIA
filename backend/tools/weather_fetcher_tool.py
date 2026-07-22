@@ -44,7 +44,11 @@ __all__ = [
 # 配置区
 # ============================================================
 
-# open-meteo 请求的气象变量（与原预测脚本一致）
+# open-meteo 请求的气象变量。
+#
+# 注意：新增的三个字段只用于天气查询和分析。
+# pv_predictor.convert_to_era5_format() 仍然通过原有 target_cols 白名单选取模型特征，
+# 因此这些字段不会进入预测模型。
 VARIABLES = [
     "temperature_2m",
     "dew_point_2m",
@@ -53,6 +57,8 @@ VARIABLES = [
     "wind_direction_10m",
     "shortwave_radiation",
     "direct_radiation",
+    "precipitation",
+    "sunshine_duration",
 ]
 
 # API 地址
@@ -279,6 +285,21 @@ def _format_weather_summary(df: pd.DataFrame, label: str = "气象数据") -> st
         if col in df.columns:
             s = df[col]
             lines.append(f"{label_str}: {fmt % s.min()} ~ {fmt % s.max()} {unit}，均值 {fmt % s.mean()} {unit}")
+
+    # 分析字段单独汇总，避免把它们混入预测特征说明。
+    if "precipitation" in df.columns:
+        precipitation = pd.to_numeric(df["precipitation"], errors="coerce").dropna()
+        if not precipitation.empty:
+            lines.append(
+                f"总降水量: {precipitation.sum():.1f} mm，"
+                f"最大单小时降水量: {precipitation.max():.1f} mm，"
+                f"有降水时段: {(precipitation > 0).sum()} 小时"
+            )
+
+    if "sunshine_duration" in df.columns:
+        sunshine = pd.to_numeric(df["sunshine_duration"], errors="coerce").dropna()
+        if not sunshine.empty:
+            lines.append(f"有效日照时长: {sunshine.sum() / 3600:.1f} 小时")
 
     return "\n".join(lines)
 

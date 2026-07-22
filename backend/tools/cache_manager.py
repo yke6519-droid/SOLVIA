@@ -37,17 +37,26 @@ MYSQL_URL = os.getenv("MYSQL_URL")
 WEATHER_FIELDS = [
     "temperature_2m", "dew_point_2m", "cloud_cover_low",
     "shortwave_radiation", "direct_radiation",
+    "precipitation", "sunshine_duration",
     "10m_u_component_of_wind", "10m_v_component_of_wind",
 ]
 # 数据库列名(去掉了前缀,更简洁)
 DB_WEATHER_FIELDS = [
     "temperature_2m", "dew_point_2m", "cloud_cover_low",
     "shortwave_radiation", "direct_radiation",
+    "precipitation", "sunshine_duration",
     "wind_u_component", "wind_v_component",
 ]
 
 PREDICTION_MODE_HISTORICAL = "historical_actual"
 PREDICTION_MODE_FORECAST = "forecast"
+
+
+def _nullable_float(value):
+    """将可选气象字段安全转换为浮点数，缺失值保留为 NULL。"""
+    if value is None or pd.isna(value):
+        return None
+    return float(value)
 
 
 def get_prediction_data_mode(predict_date: str) -> str:
@@ -193,6 +202,7 @@ def read_forecast_cache(station_id: str, target_date: str) -> Optional[pd.DataFr
     query = text("""
         SELECT record_time, temperature_2m, dew_point_2m, cloud_cover_low,
                shortwave_radiation, direct_radiation,
+               precipitation, sunshine_duration,
                wind_u_component, wind_v_component
         FROM weather_forecast_cache
         WHERE station_id = :sid
@@ -219,7 +229,7 @@ def write_forecast_cache(station_id: str, df: pd.DataFrame) -> None:
     写入未来气象缓存。幂等。
     参数:
         station_id: 站点ID
-        df: open-meteo 格式 DataFrame(含 time + 7 个气象字段)
+        df: open-meteo 格式 DataFrame(含 time、原预测字段和天气分析字段)
     """
     engine = get_engine()
     rows = []
@@ -232,6 +242,8 @@ def write_forecast_cache(station_id: str, df: pd.DataFrame) -> None:
             "cloud_cover_low": float(row.get("cloud_cover_low", 0)),
             "shortwave_radiation": float(row.get("shortwave_radiation", 0)),
             "direct_radiation": float(row.get("direct_radiation", 0)),
+            "precipitation": _nullable_float(row.get("precipitation")),
+            "sunshine_duration": _nullable_float(row.get("sunshine_duration")),
             "wind_u_component": float(row.get("10m_u_component_of_wind", 0)),
             "wind_v_component": float(row.get("10m_v_component_of_wind", 0)),
         })
@@ -241,10 +253,12 @@ def write_forecast_cache(station_id: str, df: pd.DataFrame) -> None:
                 INSERT IGNORE INTO weather_forecast_cache
                     (station_id, record_time, temperature_2m, dew_point_2m,
                      cloud_cover_low, shortwave_radiation, direct_radiation,
+                     precipitation, sunshine_duration,
                      wind_u_component, wind_v_component)
                 VALUES
                     (:station_id, :record_time, :temperature_2m, :dew_point_2m,
                      :cloud_cover_low, :shortwave_radiation, :direct_radiation,
+                     :precipitation, :sunshine_duration,
                      :wind_u_component, :wind_v_component)
             """), r)
     print(f"💾 未来气象已缓存: {station_id} ({len(rows)} 条)")
@@ -289,6 +303,7 @@ def read_archive_cache(station_id: str, target_date: str) -> Optional[pd.DataFra
     query = text("""
         SELECT record_time, temperature_2m, dew_point_2m, cloud_cover_low,
                shortwave_radiation, direct_radiation,
+               precipitation, sunshine_duration,
                wind_u_component, wind_v_component
         FROM weather_archive_cache
         WHERE station_id = :sid
@@ -324,6 +339,8 @@ def write_archive_cache(station_id: str, df: pd.DataFrame) -> None:
             "cloud_cover_low": float(row.get("cloud_cover_low", 0)),
             "shortwave_radiation": float(row.get("shortwave_radiation", 0)),
             "direct_radiation": float(row.get("direct_radiation", 0)),
+            "precipitation": _nullable_float(row.get("precipitation")),
+            "sunshine_duration": _nullable_float(row.get("sunshine_duration")),
             "wind_u_component": float(row.get("10m_u_component_of_wind", 0)),
             "wind_v_component": float(row.get("10m_v_component_of_wind", 0)),
         })
@@ -333,10 +350,12 @@ def write_archive_cache(station_id: str, df: pd.DataFrame) -> None:
                 INSERT IGNORE INTO weather_archive_cache
                     (station_id, record_time, temperature_2m, dew_point_2m,
                      cloud_cover_low, shortwave_radiation, direct_radiation,
+                     precipitation, sunshine_duration,
                      wind_u_component, wind_v_component)
                 VALUES
                     (:station_id, :record_time, :temperature_2m, :dew_point_2m,
                      :cloud_cover_low, :shortwave_radiation, :direct_radiation,
+                     :precipitation, :sunshine_duration,
                      :wind_u_component, :wind_v_component)
             """), r)
     print(f"💾 历史气象已缓存: {station_id} ({len(rows)} 条)")

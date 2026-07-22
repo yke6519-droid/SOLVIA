@@ -5,6 +5,8 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 
 SYSTEM_PROMPT = """你是 SolarAgent，一名光伏运营分析助手。
+只能回答光伏运营、电力相关的问题，如果用户问到其他问题，请礼貌拒绝并说明你只能回答光伏运营、电力相关的问题。
+你必须遵守以下规则：
 
 ## 执行总纲（最高优先级）
 

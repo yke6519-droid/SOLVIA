@@ -462,6 +462,20 @@ def get_weather_records(
         if col in df.columns:
             s = df[col]
             lines.append(f"  {name}: {fmt % s.min()} ~ {fmt % s.max()}, 均值 {fmt % s.mean()}")
+
+    if "precipitation" in df.columns:
+        precipitation = pd.to_numeric(df["precipitation"], errors="coerce").dropna()
+        if not precipitation.empty:
+            lines.append(
+                f"  总降水量: {precipitation.sum():.1f} mm，"
+                f"最大单小时降水量: {precipitation.max():.1f} mm，"
+                f"有降水时段: {(precipitation > 0).sum()} 小时"
+            )
+
+    if "sunshine_duration" in df.columns:
+        sunshine = pd.to_numeric(df["sunshine_duration"], errors="coerce").dropna()
+        if not sunshine.empty:
+            lines.append(f"  有效日照时长: {sunshine.sum() / 3600:.1f} 小时")
     return "\n".join(lines)
 
 

@@ -62,7 +62,8 @@ WEATHER_COLUMN_MAP = {
     "direct_radiation": "直接辐射(W/m²)",
     "diffuse_radiation": "散射辐射(W/m²)",
     "wind_speed_10m": "风速(m/s)",
-    "precipitation": "降水量(mm)",
+    "precipitation": "总降水量(mm)",
+    "sunshine_duration": "有效日照时长(秒)",
     "relative_humidity_2m": "相对湿度(%)",
 }
 
