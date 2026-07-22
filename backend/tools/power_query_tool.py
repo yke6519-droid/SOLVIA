@@ -310,7 +310,7 @@ def get_station_info(
 @tool
 def get_actual_power(
     station_name: Annotated[str, "站点名称,例如 '英杰'"],
-    target_date: Annotated[str, "日期,支持 'YYYY-MM-DD'、'M月D日'、'M月D号' 等格式"],
+    target_date: Annotated[str, "日期,支持 'YYYY-MM-DD'、'M月D日'、'M.D'、'后天' 等格式"],
 ) -> str:
     """查询某站点指定日期的实际发电量(24小时数据)。
 
@@ -336,8 +336,8 @@ def get_actual_power(
 @tool
 def get_actual_power_by_range(
     station_name: Annotated[str, "站点名称,例如 '英杰'"],
-    start_date: Annotated[str, "起始日期,支持 'YYYY-MM-DD'、'M月D日' 等格式"],
-    end_date: Annotated[str, "结束日期,支持 'YYYY-MM-DD'、'M月D日' 等格式"],
+    start_date: Annotated[str, "起始日期,支持 'YYYY-MM-DD'、'M月D日'、'M.D'、'后天' 等格式"],
+    end_date: Annotated[str, "结束日期,支持 'YYYY-MM-DD'、'M月D日'、'M.D'、'后天' 等格式"],
 ) -> str:
     """查询某站点指定日期范围的实际发电量(按天汇总)。
 
@@ -378,7 +378,7 @@ def get_actual_power_by_range(
 @tool
 def get_predicted_power(
     station_name: Annotated[str, "站点名称,例如 '英杰'"],
-    target_date: Annotated[str, "日期,支持 'YYYY-MM-DD'、'M月D日' 等格式"],
+    target_date: Annotated[str, "日期,支持 'YYYY-MM-DD'、'M月D日'、'M.D'、'后天' 等格式"],
 ) -> str:
     """查询某站点指定日期的预测发电量。
 
@@ -419,7 +419,7 @@ def get_predicted_power(
 @tool
 def get_weather_records(
     station_name: Annotated[str, "站点名称,例如 '英杰'"],
-    target_date: Annotated[str, "日期,支持 'YYYY-MM-DD'、'M月D日' 等格式"],
+    target_date: Annotated[str, "日期,支持 'YYYY-MM-DD'、'M月D日'、'M.D'、'后天' 等格式"],
     data_type: Annotated[str, "数据类型: 'forecast'=未来气象预报, 'archive'=历史气象实况"] = "archive",
 ) -> str:
     """查询某站点指定日期的气象数据。
@@ -468,7 +468,7 @@ def get_weather_records(
 @tool
 def get_power_comparison(
     station_name: Annotated[str, "站点名称,例如 '英杰'"],
-    target_date: Annotated[str, "日期,支持 'YYYY-MM-DD'、'M月D日' 等格式"],
+    target_date: Annotated[str, "日期,支持 'YYYY-MM-DD'、'M月D日'、'M.D'、'后天' 等格式"],
 ) -> str:
     """查询某站点指定日期的预测vs实际发电量对比。
 

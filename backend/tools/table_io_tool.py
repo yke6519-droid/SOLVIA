@@ -177,11 +177,11 @@ def _write_dataframe(df: pd.DataFrame, filepath: str, file_format: str):
 @tool
 def export_table(
     station_name: Annotated[str, "站点名称,如 '英杰'"],
-    target_date: Annotated[str, "日期,支持 'YYYY-MM-DD'、'7月9日'、'今天' 等"],
+    target_date: Annotated[str, "日期,支持 'YYYY-MM-DD'、'7月9日'、'7.9'、'后天' 等"],
     data_type: Annotated[str, "数据类型: 'actual'=实际发电量, 'predicted'=预测发电量, 'comparison'=预测vs实际对比, 'weather_archive'=历史气象, 'weather_forecast'=预报气象"],
     file_format: Annotated[str, "文件格式: 'xlsx' 或 'csv',默认 xlsx"] = "xlsx",
     filename: Annotated[str, "文件名(可选),不传则自动生成"] = "",
-    end_date: Annotated[str, "结束日期(可选),支持 'YYYY-MM-DD'、'6月1日' 等。传入时 target_date 作为起始日期,导出日期范围内的全部原始逐小时数据。仅对 data_type='actual' 有效"] = "",
+    end_date: Annotated[str, "结束日期(可选),支持 'YYYY-MM-DD'、'6月1日'、'6.1'、'后天' 等。传入时 target_date 作为起始日期,导出日期范围内的全部原始逐小时数据。仅对 data_type='actual' 有效"] = "",
 ) -> str:
     """导出光伏数据为 Excel 或 CSV 文件。
 

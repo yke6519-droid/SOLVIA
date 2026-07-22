@@ -1094,7 +1094,7 @@ def _request_prediction_confirmation(station_name: str, predict_date: str) -> st
 @tool(response_format="content_and_artifact")
 def predict_power(
     station_name: Annotated[str, "站点名称，例如 '英杰'"],
-    target_date: Annotated[str, "待预测日期，支持 'YYYY-MM-DD'、'M月D日'、'M月D号'、'M-D' 等格式。留空或传 '今天' 则预测今天"] = "",
+    target_date: Annotated[str, "待预测日期，支持 'YYYY-MM-DD'、'M月D日'、'M-D'、'M/D'、'M.D'、'后天'、'大后天' 等格式。留空或传 '今天' 则预测今天"] = "",
 ) -> tuple[str, pd.DataFrame]:
     """预测指定光伏站点在指定日期的 24 小时发电量。
 
@@ -1108,7 +1108,7 @@ def predict_power(
     7. 返回预测摘要和完整预测数据
 
     日期格式说明：
-    - target_date 支持多种自然写法：'2026-07-03'、'7月3日'、'7月3号'、'7-3'、'今天'、'昨天'
+    - target_date 支持多种自然写法：'2026-07-03'、'7月3日'、'7-3'、'7.3'、'今天'、'昨天'、'后天'
     - 留空字符串 "" 或传 "今天" 表示预测今天
     - 历史基准日自动取 target_date 的前一天，无需单独传入
 
@@ -1123,7 +1123,7 @@ def predict_power(
     from backend.tools.weather_fetcher_tool import _load_stations_from_db
     from backend.app.services.station_resolver import resolve_station
 
-    # 【日期解析】支持 YYYY-MM-DD / M月D日 / M月D号 / M-D / 今天 / 昨天 等格式
+    # 【日期解析】支持标准日期、中文日期、M-D/M-D/M.D 简写及相对日期
     predict_date = parse_flexible_date(target_date)
     history_date = (datetime.strptime(predict_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
 

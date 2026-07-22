@@ -161,7 +161,7 @@ def _build_chart_data(df, data_type, info, predict_date):
 @tool
 def get_power_chart_data(
     station_name: Annotated[str, "站点名称,如 '英杰'"],
-    target_date: Annotated[str, "日期,支持 'YYYY-MM-DD'、'7月13日'、'今天' 等"],
+    target_date: Annotated[str, "日期,支持 'YYYY-MM-DD'、'7月13日'、'7.13'、'后天' 等"],
     data_type: Annotated[str, "数据类型: 'actual'=实际发电量, 'predicted'=预测发电量, 'comparison'=预测vs实际对比"],
 ) -> str:
     """获取发电量可视化图表数据(返回结构化JSON)。
@@ -341,8 +341,8 @@ def _build_range_chart_data(frames, station_info, start_date, end_date, data_typ
 @tool
 def get_power_chart_data_by_range(
     station_name: Annotated[str, "站点名称，例如 '英杰'"],
-    start_date: Annotated[str, "开始日期，支持 YYYY-MM-DD、6月1日等格式"],
-    end_date: Annotated[str, "结束日期，支持 YYYY-MM-DD、6月3日等格式"],
+    start_date: Annotated[str, "开始日期，支持 YYYY-MM-DD、6月1日、6.1、后天等格式"],
+    end_date: Annotated[str, "结束日期，支持 YYYY-MM-DD、6月3日、6.3、后天等格式"],
     data_type: Annotated[str, "数据类型：actual=实际，predicted=预测，comparison=预测与实际对比"] = "actual",
     granularity: Annotated[str, "粒度：hourly=逐小时，daily=按日汇总，auto=1到5天逐小时、超过5天按日汇总"] = "auto",
 ) -> str:
