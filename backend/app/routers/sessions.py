@@ -20,7 +20,7 @@ router = APIRouter(prefix="/api", tags=["sessions"])
 logger = logging.getLogger(__name__)
 
 DEFAULT_SESSION_TITLE = "新会话"
-MAX_SESSION_TITLE_LENGTH = 10
+MAX_SESSION_TITLE_LENGTH = 16
 
 
 def _get_engine():
@@ -29,7 +29,7 @@ def _get_engine():
 
 
 def build_session_title(message: str) -> str:
-    """从首条用户消息生成不超过 10 个 Unicode 字符的会话名称。"""
+    """从首条用户消息生成不超过 16 个 Unicode 字符的会话名称。"""
     normalized = " ".join(str(message or "").split())
     title = "".join(list(normalized)[:MAX_SESSION_TITLE_LENGTH])
     return title or DEFAULT_SESSION_TITLE

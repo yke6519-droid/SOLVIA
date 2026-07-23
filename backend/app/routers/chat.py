@@ -18,6 +18,14 @@ from backend.app.services.session_context_service import (
     load_context as load_session_context,
     save_active_station,
     save_active_chart,
+    save_active_dataset,
+)
+from backend.app.services.dataset_artifact_service import (
+    bind_dataset_context,
+    get_dataset_context,
+    dataset_reference,
+    load_dataset_artifact,
+    reset_dataset_context,
 )
 from backend.app.services.attachment_context import (
     bind_attachment_context,
@@ -123,22 +131,44 @@ def _build_agent_input_with_context(
     attachments: list[dict],
     persisted_context: dict | None = None,
 ) -> str:
-    """Inject attachment and latest-chart references without raw data arrays."""
+    """注入附件、数据制品和图表的轻量引用，不把原始数据数组放进 Prompt。"""
     parts = []
     attachment_context = build_attachment_context(attachments)
     if attachment_context:
         parts.append(attachment_context)
 
+    active_dataset = (persisted_context or {}).get("active_dataset")
+    if isinstance(active_dataset, dict) and active_dataset.get("artifact_id"):
+        dataset_reference_payload = {
+            key: active_dataset.get(key)
+            for key in (
+                "artifact_id",
+                "artifact_type",
+                "source_tool",
+                "data_type",
+                "stations",
+                "period_start",
+                "period_end",
+                "granularity",
+                "row_count",
+            )
+            if active_dataset.get(key) not in (None, "", [])
+        }
+        parts.append(
+            "当前会话最近一次数据制品，可在用户要求导出刚才数据时复用："
+            + json.dumps(dataset_reference_payload, ensure_ascii=False)
+        )
+
     active_chart = (persisted_context or {}).get("active_chart")
     if isinstance(active_chart, dict):
         reference = {
             key: active_chart.get(key)
-            for key in ("chart_id", "artifact_id", "title", "chart_type")
+            for key in ("chart_id", "title", "chart_type")
             if active_chart.get(key)
         }
         if reference:
             parts.append(
-                "当前会话最近一次已生成图表，可在用户要求导出刚才数据时复用："
+                "当前会话最近一次已生成图表，仅用于恢复图表展示，不作为表格导出数据源："
                 + json.dumps(reference, ensure_ascii=False)
             )
 
@@ -386,6 +416,17 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
             # ContextVar 必须在 Agent 执行任务内部绑定，工具线程才能定位当前 session。
             bridge_token = agent_manager.bind_bridge(bridge)
             chart_context_token = bind_chart_context(req.session_id, user_id)
+            active_dataset = persisted_context.get("active_dataset")
+            active_dataset_id = (
+                str(active_dataset.get("artifact_id"))
+                if isinstance(active_dataset, dict) and active_dataset.get("artifact_id")
+                else None
+            )
+            dataset_context_token = bind_dataset_context(
+                req.session_id,
+                user_id,
+                active_dataset_artifact_id=active_dataset_id,
+            )
             station_context_token = bind_station_resolution_context(
                 active_station=active_station,
             )
@@ -482,6 +523,20 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
             finally:
                 # 解绑 ContextVar，避免泄漏
                 if task_succeeded:
+                    dataset_context = get_dataset_context(required=False)
+                    if dataset_context and dataset_context.active_dataset_artifact_id:
+                        try:
+                            dataset = load_dataset_artifact(
+                                dataset_context.active_dataset_artifact_id
+                            )
+                            await asyncio.to_thread(
+                                save_active_dataset,
+                                req.session_id,
+                                user_id,
+                                dataset_reference(dataset),
+                            )
+                        except Exception:
+                            logger.exception("保存会话最近数据制品引用失败")
                     context = get_station_resolution_context()
                     selected_station = (
                         context.last_user_selected_station
@@ -501,6 +556,7 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
                             logger.exception("保存会话级站点上下文失败")
                 agent_manager.reset_bridge(bridge_token)
                 reset_chart_context(chart_context_token)
+                reset_dataset_context(dataset_context_token)
                 reset_station_resolution_context(station_context_token)
                 reset_attachment_context(attachment_context_token)
                 reset_raw_user_message(raw_message_token)
@@ -564,6 +620,17 @@ async def chat(req: ChatRequest, current_user: dict = Depends(get_current_user))
     if not isinstance(active_station, dict):
         active_station = None
     chart_context_token = bind_chart_context(req.session_id, user_id)
+    active_dataset = persisted_context.get("active_dataset")
+    active_dataset_id = (
+        str(active_dataset.get("artifact_id"))
+        if isinstance(active_dataset, dict) and active_dataset.get("artifact_id")
+        else None
+    )
+    dataset_context_token = bind_dataset_context(
+        req.session_id,
+        user_id,
+        active_dataset_artifact_id=active_dataset_id,
+    )
     station_context_token = bind_station_resolution_context(
         active_station=active_station,
     )
@@ -584,6 +651,20 @@ async def chat(req: ChatRequest, current_user: dict = Depends(get_current_user))
             task_succeeded = True
     finally:
         if task_succeeded:
+            dataset_context = get_dataset_context(required=False)
+            if dataset_context and dataset_context.active_dataset_artifact_id:
+                try:
+                    dataset = load_dataset_artifact(
+                        dataset_context.active_dataset_artifact_id
+                    )
+                    await asyncio.to_thread(
+                        save_active_dataset,
+                        req.session_id,
+                        user_id,
+                        dataset_reference(dataset),
+                    )
+                except Exception:
+                    logger.exception("保存会话最近数据制品引用失败")
             context = get_station_resolution_context()
             selected_station = (
                 context.last_user_selected_station
@@ -601,6 +682,7 @@ async def chat(req: ChatRequest, current_user: dict = Depends(get_current_user))
                 except Exception:
                     logger.exception("保存会话级站点上下文失败")
         reset_chart_context(chart_context_token)
+        reset_dataset_context(dataset_context_token)
         reset_station_resolution_context(station_context_token)
         reset_attachment_context(attachment_context_token)
         reset_raw_user_message(raw_message_token)

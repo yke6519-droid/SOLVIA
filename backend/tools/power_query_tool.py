@@ -22,6 +22,7 @@ power_query_tool.py - 数据库查询工具模块 (LangChain Tools)
 TODO:
   - 发电量异常检测:聚合统计(和前7天均值对比),后续按需实现
 """
+import json
 import pandas as pd
 from typing import Annotated
 from sqlalchemy import text
@@ -35,6 +36,12 @@ from backend.app.database import get_engine
 from backend.app.services.station_catalog_service import (
     load_stations_from_db,
     query_stations_by_region,
+)
+from backend.app.services.dataset_artifact_service import (
+    dataset_reference,
+    make_power_frame,
+    register_power_frame,
+    create_dataset_artifact,
 )
 
 # MySQL 连接配置(与其他模块一致)
@@ -186,7 +193,22 @@ def get_actual_power(
 
     df["record_time"] = pd.to_datetime(df["record_time"])
     summary = _format_power_summary(df, f"{info['name']} {predict_date} 实际发电量")
-    return summary
+    dataset_frame = make_power_frame(
+        df,
+        station_name=info["name"],
+        source_type="actual",
+        period_start=predict_date,
+        period_end=predict_date,
+        timestamp_column="record_time",
+        value_column="power_kwh",
+        source_tool="get_actual_power",
+        station_id=station_id,
+    )
+    dataset = register_power_frame(dataset_frame)
+    return (
+        f"{summary}\n\n数据制品已生成："
+        f"{json.dumps(dataset_reference(dataset), ensure_ascii=False)}"
+    )
 
 
 @tool
@@ -228,7 +250,36 @@ def get_actual_power_by_range(
         lines.append(f"  {row['date']}: {row['daily_total']:.1f} kWh")
     avg = df["daily_total"].mean()
     lines.append(f"  日均发电量: {avg:.1f} kWh")
-    return "\n".join(lines)
+    dataset_frame = pd.DataFrame(
+        {
+            "date": pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d"),
+            "station": info["name"],
+            "source_type": "actual",
+            "series_key": info["name"],
+            "value_kwh": pd.to_numeric(df["daily_total"], errors="coerce").fillna(0.0),
+        }
+    )
+    dataset = create_dataset_artifact(
+        dataset_frame,
+        artifact_type="daily_aggregate",
+        source_tool="get_actual_power_by_range",
+        metadata={
+            "data_type": "actual",
+            "source_type": "actual",
+            "station": info["name"],
+            "stations": [info["name"]],
+            "station_id": station_id,
+            "period_start": start,
+            "period_end": end,
+            "granularity": "daily_total",
+            "series_dimension": "station",
+        },
+    )
+    summary = "\n".join(lines)
+    return (
+        f"{summary}\n\n数据制品已生成："
+        f"{json.dumps(dataset_reference(dataset), ensure_ascii=False)}"
+    )
 
 
 @tool
@@ -264,11 +315,25 @@ def get_predicted_power(
     peak_val = float(peak_row["fusion"])
     weather = df["weather_type"].iloc[0] if "weather_type" in df.columns else "未知"
 
+    dataset_frame = make_power_frame(
+        df,
+        station_name=info["name"],
+        source_type="predicted",
+        period_start=predict_date,
+        period_end=predict_date,
+        timestamp_column="time",
+        value_column="fusion",
+        source_tool="get_predicted_power",
+        station_id=station_id,
+        weather_type=weather,
+    )
+    dataset = register_power_frame(dataset_frame)
     return (
         f"{info['name']} {predict_date} 预测发电量:\n"
         f"  总发电量: {total:.1f} kWh\n"
         f"  峰值时段: {peak_time}, 峰值发电: {peak_val:.1f} kWh\n"
-        f"  天气类型: {weather}"
+        f"  天气类型: {weather}\n\n数据制品已生成："
+        f"{json.dumps(dataset_reference(dataset), ensure_ascii=False)}"
     )
 
 
@@ -332,7 +397,32 @@ def get_weather_records(
         sunshine = pd.to_numeric(df["sunshine_duration"], errors="coerce").dropna()
         if not sunshine.empty:
             lines.append(f"  有效日照时长: {sunshine.sum() / 3600:.1f} 小时")
-    return "\n".join(lines)
+    dataset_frame = df.copy()
+    dataset_frame["station"] = info["name"]
+    dataset_frame["station_id"] = station_id
+    dataset_frame["source_type"] = data_type
+    dataset_frame["series_key"] = info["name"]
+    dataset = create_dataset_artifact(
+        dataset_frame,
+        artifact_type="tabular",
+        source_tool="get_weather_records",
+        metadata={
+            "data_type": f"weather_{data_type}",
+            "source_type": data_type,
+            "station": info["name"],
+            "stations": [info["name"]],
+            "station_id": station_id,
+            "period_start": predict_date,
+            "period_end": predict_date,
+            "granularity": "hourly",
+            "series_dimension": "station",
+        },
+    )
+    summary = "\n".join(lines)
+    return (
+        f"{summary}\n\n数据制品已生成："
+        f"{json.dumps(dataset_reference(dataset), ensure_ascii=False)}"
+    )
 
 
 @tool
@@ -404,7 +494,52 @@ def get_power_comparison(
         f"  最大逐时偏差: {int(max_diff_row['hour']):02d}:00, 差 {max_diff_row['diff']:.1f} kWh",
         f"  对齐小时数: {len(merged)} / 24",
     ]
-    return "\n".join(lines)
+    timestamp = pd.to_datetime(predict_date) + pd.to_timedelta(merged["hour"], unit="h")
+    comparison_frame = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "timestamp": timestamp.dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    "station": info["name"],
+                    "source_type": "predicted",
+                    "series_key": "predicted",
+                    "value_kwh": merged["fusion"].astype(float),
+                }
+            ),
+            pd.DataFrame(
+                {
+                    "timestamp": timestamp.dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    "station": info["name"],
+                    "source_type": "actual",
+                    "series_key": "actual",
+                    "value_kwh": merged["power_kwh"].astype(float),
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+    dataset = create_dataset_artifact(
+        comparison_frame,
+        artifact_type="hourly_series",
+        source_tool="get_power_comparison",
+        metadata={
+            "data_type": "comparison",
+            "source_types": ["predicted", "actual"],
+            "station": info["name"],
+            "stations": [info["name"]],
+            "station_id": station_id,
+            "period_start": predict_date,
+            "period_end": predict_date,
+            "granularity": "hourly",
+            "series_dimension": "source_type",
+            "series_labels": {"predicted": "预测发电量", "actual": "实际发电量"},
+        },
+    )
+    summary = "\n".join(lines)
+    return (
+        f"{summary}\n\n数据制品已生成："
+        f"{json.dumps(dataset_reference(dataset), ensure_ascii=False)}"
+    )
 
 
 # ============================================================

@@ -8,12 +8,14 @@ from uuid import uuid4
 from langchain_core.tools import tool
 from pydantic import Field
 
-from backend.app.charting.artifact_store import artifact_store
 from backend.app.charting.context import (
     capability_preflight_done,
     consume_chart_plan_attempt,
-    get_chart_context,
     mark_capability_preflight,
+)
+from backend.app.services.dataset_artifact_service import (
+    get_dataset_context,
+    save_dataset_artifact,
 )
 from backend.app.charting.datasets import (
     DatasetSourceError,
@@ -258,7 +260,7 @@ def get_power_dataset(
     from backend.tools.power_query_tool import _resolve_station_id
 
     # 获取当前用户与会话
-    context = get_chart_context()
+    dataset_context = get_dataset_context()
     # 确保能力预检已完成，返回当前注册能力和限制
     capability_preflight = _ensure_capability_preflight()
     # 解析站点名称列表，去重并按顺序保留
@@ -341,8 +343,8 @@ def get_power_dataset(
     artifact = DatasetArtifact(
         artifact_id=f"artifact_{uuid4().hex[:12]}",
         artifact_type="daily_aggregate" if is_daily else "hourly_series",
-        owner_user_id=context.user_id,
-        session_id=context.session_id,
+        owner_user_id=dataset_context.user_id,
+        session_id=dataset_context.session_id,
         schema={
             axis_field: FieldDefinition(
                 type="date" if is_daily else "datetime",
@@ -383,7 +385,7 @@ def get_power_dataset(
             "source_tool": "get_power_dataset",
         },
     )
-    artifact_store.save(artifact)
+    save_dataset_artifact(artifact)
     return json.dumps(
         {
             "status": "created",

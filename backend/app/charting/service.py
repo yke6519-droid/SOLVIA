@@ -1,12 +1,16 @@
 """Application service for the structured chart pipeline."""
 
-from backend.app.charting.artifact_store import artifact_store
 from backend.app.charting.builders import build_aggregate_bar, build_multi_line, build_single_line
 from backend.app.charting.context import get_chart_context
 from backend.app.charting.errors import ChartValidationError
 from backend.app.charting.registry import CapabilityDefinition, get_capability
 from backend.app.charting.schemas import ChartPlan, ChartSpec, FieldDefinition, SeriesBinding
 from backend.app.charting.validators import validate_chart_plan
+from backend.app.services.dataset_artifact_service import (
+    DatasetArtifactError,
+    get_dataset_context,
+    load_dataset_artifact,
+)
 
 
 def _field_role(field_name: str, definition: FieldDefinition) -> str | None:
@@ -128,11 +132,21 @@ def resolve_chart_plan(plan: ChartPlan, artifact, capability: CapabilityDefiniti
 class ChartService:
     def create_chart(self, plan: ChartPlan) -> ChartSpec:
         context = get_chart_context()
-        artifact = artifact_store.get(
-            plan.artifact_id,
-            user_id=context.user_id,
-            session_id=context.session_id,
-        )
+        try:
+            # 生产请求使用通用数据制品服务，可从 MySQL 恢复；离线单元测试
+            # 没有 DatasetContext 时仍允许读取进程内测试制品。
+            if get_dataset_context(required=False) is not None:
+                artifact = load_dataset_artifact(plan.artifact_id)
+            else:
+                from backend.app.charting.artifact_store import artifact_store
+
+                artifact = artifact_store.get(
+                    plan.artifact_id,
+                    user_id=context.user_id,
+                    session_id=context.session_id,
+                )
+        except DatasetArtifactError as exc:
+            raise ChartValidationError(exc.code, exc.message) from exc
         capability = get_capability(plan.capability_id)
         if capability is None:
             # Reuse the validator's stable error code and allowed-capability details.

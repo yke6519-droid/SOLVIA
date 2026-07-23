@@ -341,6 +341,34 @@ def get_weather_by_range(
     summary = _format_weather_summary(
         result, f"{start_date} ~ {end_date} 气象数据"
     )
+    # 天气查询同样登记为通用数据制品，后续可以被导出或分析复用。
+    from backend.app.services.dataset_artifact_service import (
+        create_dataset_artifact,
+        dataset_reference,
+    )
+    import json
+
+    artifact_frame = result.copy()
+    artifact_frame["source_type"] = "weather"
+    artifact_frame["series_key"] = "weather"
+    dataset = create_dataset_artifact(
+        artifact_frame,
+        artifact_type="tabular",
+        source_tool="get_weather_by_range",
+        metadata={
+            "data_type": "weather",
+            "source_type": "weather",
+            "period_start": start_date,
+            "period_end": end_date,
+            "granularity": "hourly",
+            "latitude": lat,
+            "longitude": lon,
+        },
+    )
+    summary = (
+        f"{summary}\n\n数据制品已生成："
+        f"{json.dumps(dataset_reference(dataset), ensure_ascii=False)}"
+    )
     return summary, result
 
 

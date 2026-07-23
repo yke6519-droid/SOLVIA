@@ -30,10 +30,10 @@ from typing import Annotated, Optional
 
 from langchain_core.tools import tool, ToolException
 from dotenv import load_dotenv
-from backend.app.charting.artifact_store import artifact_store
-from backend.app.charting.context import get_chart_context
-from backend.app.charting.errors import ChartValidationError
-from backend.app.services.chart_snapshot_store import load_latest_chart_for_reference
+from backend.app.services.dataset_artifact_service import (
+    DatasetArtifactError,
+    resolve_dataset_for_export,
+)
 from backend.app.services.attachment_service import resolve_bound_attachment_path
 from backend.app.services.file_artifact_service import register_current_generated_file
 
@@ -312,23 +312,8 @@ def _reshape_artifact_for_export(frame: pd.DataFrame, artifact) -> pd.DataFrame:
     return reshaped
 
 
-def _load_artifact_for_export(artifact_id: str):
-    """按当前图表执行上下文读取数据制品并执行归属校验。"""
-    try:
-        context = get_chart_context()
-        return artifact_store.get(
-            artifact_id,
-            user_id=context.user_id,
-            session_id=context.session_id,
-        )
-    except ChartValidationError as exc:
-        raise ToolException(f"数据制品不可导出: {exc}") from exc
-    except RuntimeError as exc:
-        raise ToolException("当前任务缺少数据制品执行上下文") from exc
-
-
 def _chart_spec_to_dataframe(chart: dict) -> pd.DataFrame:
-    """Rebuild an exportable wide table from one persisted ChartSpec."""
+    """兼容旧测试的转换辅助函数；正式导出不再调用它。"""
     x_axis = chart.get("x_axis") if isinstance(chart, dict) else None
     series = chart.get("series") if isinstance(chart, dict) else None
     if not isinstance(x_axis, dict) or not isinstance(series, list):
@@ -362,41 +347,13 @@ def _chart_spec_to_dataframe(chart: dict) -> pd.DataFrame:
     return pd.DataFrame(result)
 
 
-def _load_export_dataframe(artifact_id: str) -> tuple[pd.DataFrame, dict | None]:
-    """Load current-turn artifact or recover the previous chart snapshot."""
+def _load_export_dataframe(artifact_id: str) -> tuple[pd.DataFrame, object]:
+    """只从 DatasetArtifact 读取数据，禁止从图表快照反推表格。"""
     try:
-        artifact = _load_artifact_for_export(artifact_id)
-        return _artifact_to_dataframe(artifact), None
-    except ToolException as artifact_error:
-        context = get_chart_context()
-        chart = load_latest_chart_for_reference(
-            context.session_id,
-            context.user_id,
-            artifact_id=artifact_id,
-        )
-        if chart is None:
-            raise artifact_error
-        return _chart_spec_to_dataframe(chart), chart
-
-
-def _resolve_chart_filename(filename: str, file_format: str, chart: dict) -> str:
-    """Build a safe filename from a persisted ChartSpec."""
-    if filename.strip():
-        name = _sanitize_filename(filename.strip())
-        base, ext = os.path.splitext(name)
-        if ext.lower() not in {".xlsx", ".csv"}:
-            return f"{name}.{file_format}"
-        return name if ext.lower() == f".{file_format}" else f"{base}.{file_format}"
-
-    metadata = chart.get("metadata") if isinstance(chart, dict) else {}
-    metadata = metadata if isinstance(metadata, dict) else {}
-    label = str(chart.get("title") or metadata.get("station") or "图表数据")
-    period_start = str(metadata.get("period_start") or metadata.get("date") or "")
-    period_end = str(metadata.get("period_end") or period_start)
-    period = f"_{period_start.replace('-', '')}" if period_start else ""
-    if period_end and period_end != period_start:
-        period += f"_{period_end.replace('-', '')}"
-    return f"{_sanitize_filename(label) or '图表数据'}{period}.{file_format}"
+        artifact = resolve_dataset_for_export(artifact_id)
+    except DatasetArtifactError as exc:
+        raise ToolException(f"导出数据制品不可用 [{exc.code}]: {exc.message}") from exc
+    return _artifact_to_dataframe(artifact), artifact
 
 
 def _resolve_artifact_filename(filename: str, file_format: str, artifact) -> str:
@@ -530,33 +487,31 @@ def export_table(
     os.makedirs(FILE_DIR, exist_ok=True)
 
     if artifact_id.strip():
-        df, chart_snapshot = _load_export_dataframe(artifact_id.strip())
+        df, artifact = _load_export_dataframe(artifact_id.strip())
         if df.empty:
             raise ToolException("数据制品为空，无法导出表格")
-        if chart_snapshot is not None:
-            final_name = _resolve_chart_filename(filename, file_format, chart_snapshot)
-        else:
-            artifact = _load_artifact_for_export(artifact_id.strip())
-            final_name = _resolve_artifact_filename(filename, file_format, artifact)
+        final_name = _resolve_artifact_filename(filename, file_format, artifact)
     else:
         if not station_name.strip() or not target_date.strip() or not data_type.strip():
-            raise ToolException(
-                "导出表格需要 artifact_id；如果使用旧查询方式，必须同时提供 station_name、target_date 和 data_type"
-            )
-
-        # 旧查询路径保留，避免已有单站点导出调用立即失效。
-        from backend.tools.power_query_tool import _resolve_station_id
-        from backend.tools.date_parser_tool import parse_flexible_date
-        station_id, info = _resolve_station_id(station_name)
-        predict_date = parse_flexible_date(target_date)
-        parsed_end_date = parse_flexible_date(end_date) if end_date.strip() else None
-        df = _fetch_data(data_type, station_id, info, predict_date, station_name, parsed_end_date)
-        if len(df) == 0:
-            raise ToolException(
-                f"未获取到数据: {info['name']} {predict_date} {DATA_TYPE_LABELS.get(data_type, data_type)}"
-            )
-        date_for_name = f"{predict_date}_{parsed_end_date}" if parsed_end_date else predict_date
-        final_name = _resolve_filename(filename, file_format, station_name, date_for_name, data_type)
+            # 支持多轮对话中的“导出刚才的数据”，不再强制要求再次传查询参数。
+            df, artifact = _load_export_dataframe("")
+            if df.empty:
+                raise ToolException("当前数据制品为空，无法导出表格")
+            final_name = _resolve_artifact_filename(filename, file_format, artifact)
+        else:
+            # 旧查询路径保留，避免已有单站点导出调用立即失效。
+            from backend.tools.power_query_tool import _resolve_station_id
+            from backend.tools.date_parser_tool import parse_flexible_date
+            station_id, info = _resolve_station_id(station_name)
+            predict_date = parse_flexible_date(target_date)
+            parsed_end_date = parse_flexible_date(end_date) if end_date.strip() else None
+            df = _fetch_data(data_type, station_id, info, predict_date, station_name, parsed_end_date)
+            if len(df) == 0:
+                raise ToolException(
+                    f"未获取到数据: {info['name']} {predict_date} {DATA_TYPE_LABELS.get(data_type, data_type)}"
+                )
+            date_for_name = f"{predict_date}_{parsed_end_date}" if parsed_end_date else predict_date
+            final_name = _resolve_filename(filename, file_format, station_name, date_for_name, data_type)
 
     filepath = os.path.join(FILE_DIR, final_name)
     filepath = _get_unique_filepath(filepath)
@@ -879,32 +834,29 @@ def export_table_to_bytes(
     file_format = _validate_format(file_format)
 
     if artifact_id.strip():
-        df, chart_snapshot = _load_export_dataframe(artifact_id.strip())
+        df, artifact = _load_export_dataframe(artifact_id.strip())
         if df.empty:
             raise ToolException("数据制品为空，无法导出表格")
-        if chart_snapshot is not None:
-            final_name = _resolve_chart_filename(filename, file_format, chart_snapshot)
-        else:
-            artifact = _load_artifact_for_export(artifact_id.strip())
-            final_name = _resolve_artifact_filename(filename, file_format, artifact)
+        final_name = _resolve_artifact_filename(filename, file_format, artifact)
     else:
         if not station_name.strip() or not target_date.strip() or not data_type.strip():
-            raise ToolException(
-                "导出表格需要 artifact_id；如果使用旧查询方式，必须同时提供 station_name、target_date 和 data_type"
-            )
-
-        from backend.tools.power_query_tool import _resolve_station_id
-        from backend.tools.date_parser_tool import parse_flexible_date
-        station_id, info = _resolve_station_id(station_name)
-        predict_date = parse_flexible_date(target_date)
-        parsed_end_date = parse_flexible_date(end_date) if end_date.strip() else None
-        df = _fetch_data(data_type, station_id, info, predict_date, station_name, parsed_end_date)
-        if len(df) == 0:
-            raise ToolException(
-                f"未获取到数据: {info['name']} {predict_date} {DATA_TYPE_LABELS.get(data_type, data_type)}"
-            )
-        date_for_name = f"{predict_date}_{parsed_end_date}" if parsed_end_date else predict_date
-        final_name = _resolve_filename(filename, file_format, station_name, date_for_name, data_type)
+            df, artifact = _load_export_dataframe("")
+            if df.empty:
+                raise ToolException("当前数据制品为空，无法导出表格")
+            final_name = _resolve_artifact_filename(filename, file_format, artifact)
+        else:
+            from backend.tools.power_query_tool import _resolve_station_id
+            from backend.tools.date_parser_tool import parse_flexible_date
+            station_id, info = _resolve_station_id(station_name)
+            predict_date = parse_flexible_date(target_date)
+            parsed_end_date = parse_flexible_date(end_date) if end_date.strip() else None
+            df = _fetch_data(data_type, station_id, info, predict_date, station_name, parsed_end_date)
+            if len(df) == 0:
+                raise ToolException(
+                    f"未获取到数据: {info['name']} {predict_date} {DATA_TYPE_LABELS.get(data_type, data_type)}"
+                )
+            date_for_name = f"{predict_date}_{parsed_end_date}" if parsed_end_date else predict_date
+            final_name = _resolve_filename(filename, file_format, station_name, date_for_name, data_type)
 
     return {
         "filename": final_name,

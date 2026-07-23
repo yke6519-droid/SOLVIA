@@ -1155,4 +1155,30 @@ def predict_power(
         history_date=history_date,
     )
 
+    # 预测结果也是标准数据制品，即使用户不要求画图，也可以直接导出或复盘。
+    import json
+
+    from backend.app.services.dataset_artifact_service import (
+        dataset_reference,
+        make_power_frame,
+        register_power_frame,
+    )
+
+    power_frame = make_power_frame(
+        pred_df,
+        station_name=full_name,
+        source_type="predicted",
+        period_start=predict_date,
+        period_end=predict_date,
+        timestamp_column="time",
+        value_column="fusion",
+        source_tool="predict_power",
+        station_id=station_id,
+        weather_type=weather_type,
+    )
+    dataset = register_power_frame(power_frame)
+    summary = (
+        f"{summary}\n\n数据制品已生成："
+        f"{json.dumps(dataset_reference(dataset), ensure_ascii=False)}"
+    )
     return summary, pred_df
