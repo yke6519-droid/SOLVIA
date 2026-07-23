@@ -5,6 +5,7 @@ import PowerChart from './components/PowerChart.vue'
 import AskUserCard from './components/AskUserCard.vue'
 import MarkdownMessage from './components/MarkdownMessage.vue'
 import ImportDataDialog from './components/ImportDataDialog.vue'
+import ConversationAttachmentPicker from './components/ConversationAttachmentPicker.vue'
 import {
   clearAuth,
   createSession as createSessionApi,
@@ -19,6 +20,8 @@ import {
   replyToQuestion,
   previewPowerImport,
   executePowerImport,
+  uploadAttachment,
+  downloadGeneratedFile,
   streamChat,
 } from './api'
 import { useRoute, useRouter } from './router'
@@ -55,6 +58,10 @@ const importPreview = ref(null)
 const importLoading = ref(false)
 const importExecuting = ref(false)
 const importError = ref('')
+const attachmentPicker = ref(null)
+const pendingAttachments = ref([])
+const attachmentUploading = ref(false)
+const attachmentError = ref('')
 const theme = ref(window.localStorage.getItem('solar-agent-theme') || 'dark')
 const messageList = ref(null)
 const composerInput = ref(null)
@@ -68,6 +75,8 @@ let toastTimer = null
 let authExpiryTimer = null
 let authIdleTimer = null
 let historyRequestId = 0
+// 同一会话、同一游标的请求共享一个 Promise，避免初始化和重复点击触发重复网络请求。
+const historyRequests = new Map()
 let lastAuthActivityAt = 0
 let pageWasHidden = false
 let windowWasBlurred = false
@@ -121,6 +130,31 @@ function formatTime(value) {
   const date = new Date(normalized)
   if (Number.isNaN(date.getTime())) return String(value)
   return date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+function formatFileSize(value) {
+  const size = Number(value || 0)
+  if (!Number.isFinite(size) || size <= 0) return '文件大小未知'
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function normalizeTokenUsage(value) {
+  if (!value || typeof value !== 'object') return null
+  const input = Number(value.input_tokens ?? value.prompt_tokens ?? 0)
+  const output = Number(value.output_tokens ?? value.completion_tokens ?? 0)
+  const total = Number(value.total_tokens ?? input + output)
+  if (![input, output, total].some((item) => Number.isFinite(item) && item > 0)) return null
+  return {
+    input_tokens: Math.max(0, Math.trunc(input || 0)),
+    output_tokens: Math.max(0, Math.trunc(output || 0)),
+    total_tokens: Math.max(0, Math.trunc(total || 0)),
+  }
+}
+
+function formatTokenCount(value) {
+  return Number(value || 0).toLocaleString('zh-CN')
 }
 
 function normalizeChartData(chartData) {
@@ -256,7 +290,25 @@ function mapMessage(item, index) {
     chartData,
     charts: historicalCharts,
     toolEvents: Array.isArray(item.tool_events) ? item.tool_events : [],
+    attachments: Array.isArray(item.attachments) ? item.attachments : [],
+    files: Array.isArray(item.files) ? item.files : [],
+    tokenUsage: normalizeTokenUsage(item.token_usage || item.tokenUsage || item.usage),
   }
+}
+
+function getSessionMessagesDeduped(sessionId, options = {}) {
+  const limit = options.limit || HISTORY_PAGE_SIZE
+  const beforeId = options.beforeId || ''
+  const requestKey = `${sessionId}|${limit}|${beforeId}`
+  const existing = historyRequests.get(requestKey)
+  if (existing) return existing
+
+  let request
+  request = getSessionMessages(sessionId, options).finally(() => {
+    if (historyRequests.get(requestKey) === request) historyRequests.delete(requestKey)
+  })
+  historyRequests.set(requestKey, request)
+  return request
 }
 
 function markActiveSession(sessionId) {
@@ -301,6 +353,15 @@ async function selectSession(session) {
     showToast('当前会话正在处理请求，请稍后再试')
     return
   }
+  // 已经加载过当前会话时不重复清空并请求；切换到其他会话仍走正常加载流程。
+  if (activeSessionId.value === session.id && (isLoadingMessages.value || messages.value.length > 0 || !hasOlderMessages.value)) {
+    return
+  }
+  if (pendingAttachments.value.length) {
+    pendingAttachments.value = []
+    attachmentError.value = ''
+    showToast('切换会话时已清除未发送附件')
+  }
   markActiveSession(session.id)
   messages.value = []
   hasOlderMessages.value = false
@@ -308,7 +369,7 @@ async function selectSession(session) {
   isLoadingMessages.value = true
   const requestId = ++historyRequestId
   try {
-    const data = await getSessionMessages(session.id, { limit: HISTORY_PAGE_SIZE })
+    const data = await getSessionMessagesDeduped(session.id, { limit: HISTORY_PAGE_SIZE })
     if (requestId !== historyRequestId || activeSessionId.value !== session.id) return
     const historicalMessages = (data.messages || []).map(mapMessage)
     messages.value = historicalMessages
@@ -336,7 +397,7 @@ async function loadOlderMessages() {
   isLoadingOlderMessages.value = true
   const requestId = historyRequestId
   try {
-    const data = await getSessionMessages(sessionId, {
+    const data = await getSessionMessagesDeduped(sessionId, {
       limit: HISTORY_PAGE_SIZE,
       beforeId: nextBeforeMessageId.value,
     })
@@ -364,6 +425,8 @@ function createSession() {
   nextBeforeMessageId.value = null
   isLoadingMessages.value = false
   input.value = ''
+  pendingAttachments.value = []
+  attachmentError.value = ''
   pendingQuestion.value = null
   expandedMessageId.value = null
   activeView.value = 'conversation'
@@ -455,7 +518,29 @@ function openConversationAttachmentPicker() {
     showToast('当前任务正在执行，请完成后再添加附件')
     return
   }
-  showToast('对话附件功能即将接入，数据入库请使用“导入数据文件”按钮')
+  attachmentPicker.value?.open()
+}
+
+async function handleConversationAttachment(file) {
+  attachmentError.value = ''
+  attachmentUploading.value = true
+  try {
+    const sessionId = await ensureActiveSession()
+    const data = await uploadAttachment(sessionId, file)
+    if (!data?.attachment?.attachment_id) throw new Error('后端没有返回有效的附件 ID')
+    pendingAttachments.value = [...pendingAttachments.value, data.attachment]
+    showToast(`附件已加入对话：${data.attachment.filename}`)
+  } catch (error) {
+    attachmentError.value = errorMessage(error, '附件上传失败，请稍后重试')
+  } finally {
+    attachmentUploading.value = false
+  }
+}
+
+function removeConversationAttachment(attachmentId) {
+  pendingAttachments.value = pendingAttachments.value.filter(
+    (attachment) => attachment.attachment_id !== attachmentId,
+  )
 }
 
 async function handleImportFile(file) {
@@ -564,7 +649,11 @@ async function sendMessage() {
     chartData: null,
     charts: [],
     toolEvents: [],
+    attachments: pendingAttachments.value.map((attachment) => ({ ...attachment })),
   }
+  const messageAttachments = pendingAttachments.value.map(
+    (attachment) => ({ attachment_id: attachment.attachment_id }),
+  )
   const assistantMessageId = 'assistant-' + (Date.now() + 1)
   const assistantMessageData = {
     id: assistantMessageId,
@@ -575,12 +664,16 @@ async function sendMessage() {
     chartData: null,
     charts: [],
     toolEvents: [],
+    files: [],
+    tokenUsage: null,
     processSteps: createProcessSteps(assistantMessageId),
   }
   messages.value.push(userMessage, assistantMessageData)
   // 从响应式数组中重新取出助手消息，确保 SSE token 更新能够触发 Vue 重渲染。
   const assistantMessage = messages.value[messages.value.length - 1]
   input.value = ''
+  pendingAttachments.value = []
+  attachmentError.value = ''
   activeView.value = 'conversation'
   isStreaming.value = true
   pendingQuestion.value = null
@@ -592,10 +685,14 @@ async function sendMessage() {
     await streamChat({
       sessionId,
       message: content,
+      attachments: messageAttachments,
       signal: runController.signal,
       onEvent: (eventName, data) => {
         if (eventName === 'token') {
           handleAgentToken(assistantMessage, data?.content || '')
+          if (data?.usage) assistantMessage.tokenUsage = normalizeTokenUsage(data.usage)
+        } else if (eventName === 'usage') {
+          assistantMessage.tokenUsage = normalizeTokenUsage(data?.usage)
         } else if (eventName === 'thinking' || eventName === 'agent_step' || eventName === 'step') {
           handleAgentStep(assistantMessage, data)
         } else if (eventName === 'tool_start') {
@@ -616,6 +713,12 @@ async function sendMessage() {
             code: data?.code || '',
             details: data?.error?.details || data?.details || {},
           })
+          if (data?.result_type === 'file' && data?.file?.file_id) {
+            const exists = assistantMessage.files.some(
+              (file) => file.file_id === data.file.file_id,
+            )
+            if (!exists) assistantMessage.files.push(data.file)
+          }
           const chartData = normalizeChartData(data?.chart_data)
           if (chartData) {
             assistantMessage.charts.push(chartData)
@@ -657,6 +760,7 @@ async function sendMessage() {
           assistantMessage.errorCode = data?.code || 'CHAT_AGENT_FAILED'
           assistantMessage.content = errorMessage(data, '任务执行失败')
         } else if (eventName === 'done') {
+          if (data?.usage) assistantMessage.tokenUsage = normalizeTokenUsage(data.usage)
           if (!assistantMessage.content && data?.output) assistantMessage.content = data.output
           if (!streamFailed) {
             completeActiveProcessStep(assistantMessage)
@@ -693,6 +797,15 @@ async function sendMessage() {
     isStreaming.value = false
     pendingQuestion.value = null
     await scrollToBottom()
+  }
+}
+
+async function handleGeneratedFileDownload(file) {
+  if (!file?.file_id) return
+  try {
+    await downloadGeneratedFile(file.file_id, file.filename)
+  } catch (error) {
+    showToast(errorMessage(error, '文件下载失败，请稍后重试'))
   }
 }
 
@@ -803,6 +916,8 @@ function handleAuthExpired() {
   activeSessionId.value = ''
   sessions.value = []
   messages.value = []
+  pendingAttachments.value = []
+  attachmentError.value = ''
   if (!isLoginRoute.value) authExpiredModalVisible.value = true
 }
 
@@ -932,6 +1047,8 @@ async function logout() {
   currentUser.value = null
   sessions.value = []
   messages.value = []
+  pendingAttachments.value = []
+  attachmentError.value = ''
   activeSessionId.value = ''
   router.replace('/login')
   showToast('已退出登录')
@@ -1049,7 +1166,19 @@ onBeforeUnmount(() => {
                 <div class="message-body">
                   <div class="message-meta"><span>{{ message.role === 'assistant' ? 'SolarAgent' : '你' }}</span><span>{{ message.time }}</span></div>
                   <div class="message-card" :class="{ 'result-card': message.status === 'complete' && message.chartData, 'message-error': message.status === 'error' }">
+                    <div v-if="message.attachments?.length" class="message-attachments">
+                      <div v-for="attachment in message.attachments" :key="attachment.attachment_id" class="message-attachment-item"><span>FILE</span>{{ attachment.filename }}</div>
+                    </div>
                     <MarkdownMessage v-if="message.content" :content="message.content" :streaming="message.status === 'streaming'" />
+                    <div v-if="message.files?.length" class="generated-files" aria-label="生成文件">
+                      <div v-for="file in message.files" :key="file.file_id" class="generated-file-card">
+                        <div class="generated-file-meta">
+                          <span class="generated-file-icon">FILE</span>
+                          <div><strong>{{ file.filename }}</strong><small>{{ formatFileSize(file.size_bytes) }}</small></div>
+                        </div>
+                        <button type="button" class="generated-file-download" @click="handleGeneratedFileDownload(file)">下载文件</button>
+                      </div>
+                    </div>
                     <p v-else-if="message.status === 'streaming'" class="message-placeholder">{{ message.processSteps && message.processSteps.length ? message.processSteps[message.processSteps.length - 1].label : '正在理解你的任务…' }}</p>
                     <AskUserCard
                       v-if="pendingQuestion?.messageId === message.id && (message.status === 'waiting' || pendingQuestion.status === 'submitting' || pendingQuestion.status === 'submitted')"
@@ -1075,12 +1204,23 @@ onBeforeUnmount(() => {
                       <div v-if="expandedMessageId === message.id" class="tool-details"><div v-for="(event, index) in message.toolEvents" :key="message.id + '-detail-' + index">{{ event.name }} · {{ event.result || (event.type === 'start' ? '执行中' : '完成') }}</div><div v-if="!message.toolEvents.length">本次任务没有额外工具事件</div></div>
                     </div>
                   </div>
+                  <div v-if="message.role === 'assistant' && message.tokenUsage" class="token-usage" aria-label="本轮 Token 用量">
+                    本轮消耗 Token：输入 {{ formatTokenCount(message.tokenUsage.input_tokens) }} · 输出 {{ formatTokenCount(message.tokenUsage.output_tokens) }} · 合计 {{ formatTokenCount(message.tokenUsage.total_tokens) }}
+                  </div>
                 </div>
               </article>
             </div>
           </section>
 
           <div class="composer-wrap">
+            <ConversationAttachmentPicker
+              ref="attachmentPicker"
+              :attachments="pendingAttachments"
+              :uploading="attachmentUploading"
+              :error="attachmentError"
+              @select="handleConversationAttachment"
+              @remove="removeConversationAttachment"
+            />
             <div class="composer"><button class="composer-add" type="button" aria-label="添加对话附件" @click="openConversationAttachmentPicker">+</button><input ref="composerInput" v-model="input" type="text" placeholder="告诉我你想完成的光伏任务" :disabled="isStreaming || Boolean(pendingQuestion)" @keydown.enter="sendMessage" /><button v-if="isStreaming" class="stop-button" type="button" @click="stopStreaming">停止</button><button v-else class="send-button" type="button" aria-label="发送消息" @click="sendMessage">↗</button></div>
             <!-- <div class="composer-foot"><span>SolarAgent 可能需要你确认关键业务条件</span><span>Enter 发送</span></div> -->
           </div>

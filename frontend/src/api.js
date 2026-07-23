@@ -105,6 +105,37 @@ async function parseResponseError(response, fallback) {
   })
 }
 
+/**
+ * 解析 Axios 的二进制错误响应。
+ *
+ * 文件下载正常时返回 Blob；但认证失败时，后端仍会返回 JSON 错误体。
+ * Axios 在 responseType=blob 下会把这个 JSON 也包装成 Blob，因此不能
+ * 直接读取 error.response.data.error，必须先调用 Blob.text() 再解析 JSON。
+ */
+async function normalizeBinaryResponseError(error, fallback = '请求失败，请稍后重试') {
+  const responseData = error?.response?.data
+  if (typeof Blob !== 'undefined' && responseData instanceof Blob) {
+    try {
+      const rawText = await responseData.text()
+      const payload = JSON.parse(rawText)
+      const errorInfo = payload?.error || payload || {}
+      return new ApiError(
+        errorInfo.message || payload?.detail || payload?.message || fallback,
+        error.response.status,
+        {
+          code: errorInfo.code,
+          retryable: errorInfo.retryable,
+          details: errorInfo.details,
+          requestId: errorInfo.request_id || error.response.headers?.['x-request-id'],
+        },
+      )
+    } catch {
+      // 如果响应不是 JSON（例如网关返回的纯文本），继续使用统一兜底错误。
+    }
+  }
+  return normalizeAxiosError(error, fallback)
+}
+
 export async function login(credentials) {
   try {
     const { data } = await publicClient.post('/auth/login', credentials)
@@ -313,6 +344,52 @@ export function executePowerImport(file, options = {}) {
   return uploadPowerImport('/import/power/execute', file, options.skipClean)
 }
 
+export async function uploadAttachment(sessionId, file) {
+  await ensureFreshAccessToken()
+  const formData = new FormData()
+  formData.append('session_id', sessionId)
+  formData.append('file', file, file.name)
+  try {
+    const { data } = await authClient.post('/attachments', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    })
+    return data
+  } catch (error) {
+    throw normalizeAxiosError(error, '附件上传失败')
+  }
+}
+
+/**
+ * 下载 Agent 生成的文件。
+ * 使用 Axios 获取 Blob，是因为浏览器直接打开链接不会自动携带
+ * localStorage 中的 Bearer Token；下载请求仍然复用统一认证拦截器。
+ */
+export async function downloadGeneratedFile(fileId, filename = '下载文件') {
+  // 使用本次检查返回的最新凭证，避免刷新竞态导致请求头仍拿到旧 Token。
+  const auth = await ensureFreshAccessToken()
+  try {
+    const { data } = await authClient.get(
+      `/files/${encodeURIComponent(fileId)}/download`,
+      {
+        responseType: 'blob',
+        timeout: 120000,
+        headers: { Authorization: `Bearer ${auth.access_token}` },
+      },
+    )
+    const objectUrl = URL.createObjectURL(data)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = filename || '下载文件'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+  } catch (error) {
+    throw await normalizeBinaryResponseError(error, '文件下载失败，请稍后重试')
+  }
+}
+
 export async function replyToQuestion(sessionId, answer) {
   return apiFetch(`/chat/${encodeURIComponent(sessionId)}/reply`, {
     method: 'POST',
@@ -324,7 +401,7 @@ export async function replyToQuestion(sessionId, answer) {
  * 读取 POST + SSE 流式聊天。
  * 普通接口统一走 Axios；流式接口使用 Fetch 是为了直接消费 ReadableStream。
  */
-export async function streamChat({ sessionId, message, signal, onEvent }) {
+export async function streamChat({ sessionId, message, attachments = [], signal, onEvent }) {
   const openStream = async () => fetch(`${API_BASE}/chat/stream`, {
       method: 'POST',
       signal,
@@ -334,7 +411,7 @@ export async function streamChat({ sessionId, message, signal, onEvent }) {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${getAccessToken()}`,
       },
-      body: JSON.stringify({ session_id: sessionId, message }),
+      body: JSON.stringify({ session_id: sessionId, message, attachments }),
     })
 
   let response

@@ -35,6 +35,8 @@ from sqlalchemy import text
 from langchain_core.tools import tool, ToolException
 from dotenv import load_dotenv
 from backend.app.database import get_engine
+from backend.app.services.attachment_context import get_attachment_context
+from backend.app.services.attachment_service import resolve_attachment_path
 
 load_dotenv()
 
@@ -527,7 +529,8 @@ def execute_import(
 
 @tool
 def import_power_data(
-    filename: Annotated[str, "FILE_DIR目录下的Excel文件名,如 '英杰发电数据.xlsx'"],
+    filename: Annotated[str, "FILE_DIR目录下的旧文件名;对话附件优先传 attachment_id"] = "",
+    attachment_id: Annotated[str, "对话附件ID,由附件上传接口返回"] = "",
     skip_clean: Annotated[bool, "是否跳过零值天清洗(默认False,执行清洗)"] = False,
 ) -> str:
     """导入发电量Excel数据到数据库。
@@ -540,20 +543,39 @@ def import_power_data(
     返回:
         导入结果摘要(站点数、新增条数、跳过条数)
     """
-    if not FILE_DIR:
-        raise ToolException("FILE_DIR 未配置,请在 .env 中设置 FILE_DIR")
+    if attachment_id:
+        # Agent 只能提交 attachment_id；真实路径由服务端按用户/会话权限解析。
+        context = get_attachment_context()
+        if context is None:
+            raise ToolException("当前没有可用的附件执行上下文")
+        allowed_ids = {item.get("attachment_id") for item in context.attachments}
+        if attachment_id not in allowed_ids:
+            raise ToolException("附件不属于当前任务或当前会话")
+        try:
+            attachment, resolved_path = resolve_attachment_path(
+                attachment_id,
+                user_id=context.user_id,
+                session_id=context.session_id,
+            )
+        except Exception as exc:
+            raise ToolException(str(exc)) from exc
+        filename = attachment["filename"]
+        full_path = str(resolved_path)
+    else:
+        if not FILE_DIR:
+            raise ToolException("FILE_DIR 未配置,请在 .env 中设置 FILE_DIR")
 
-    # 路径安全:防止 ../ 路径穿越
-    full_path = os.path.normpath(os.path.join(FILE_DIR, filename))
-    if not full_path.startswith(os.path.normpath(FILE_DIR)):
-        raise ToolException("文件名包含非法路径")
+        # 路径安全:防止 ../ 路径穿越
+        full_path = os.path.normpath(os.path.join(FILE_DIR, filename))
+        if not full_path.startswith(os.path.normpath(FILE_DIR)):
+            raise ToolException("文件名包含非法路径")
 
-    if not os.path.exists(full_path):
-        raise ToolException(f"文件不存在: {filename}")
+        if not os.path.exists(full_path):
+            raise ToolException(f"文件不存在: {filename}")
 
-    ext = os.path.splitext(filename)[1].lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise ToolException(f"不支持的文件格式: {ext}。支持 {', '.join(ALLOWED_EXTENSIONS)}")
+        ext = os.path.splitext(filename)[1].lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            raise ToolException(f"不支持的文件格式: {ext}。支持 {', '.join(ALLOWED_EXTENSIONS)}")
 
     # 1. 解析预览(复用公共函数)
     preview = parse_excel_preview(file_path=full_path, filename=filename, skip_clean=skip_clean)

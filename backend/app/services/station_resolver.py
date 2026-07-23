@@ -114,13 +114,13 @@ class StationResolver:
             return _copy_station(context.resolved_by_alias[cache_key])
 
         if stations is None:
-            from backend.tools.weather_fetcher_tool import _load_stations_from_db
+            from backend.app.services.station_catalog_service import load_stations_from_db
 
-            stations = _load_stations_from_db()
+            stations = load_stations_from_db()
 
-        from backend.tools.weather_fetcher_tool import _match_all_stations
+        from backend.app.services.station_catalog_service import match_all_stations
 
-        matches = _match_all_stations(reference, stations)
+        matches = match_all_stations(reference, stations)
 
         if not matches:
             return None

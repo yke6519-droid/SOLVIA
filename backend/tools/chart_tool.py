@@ -78,11 +78,11 @@ def _build_chart_data(df, data_type, info, predict_date):
       predicted:   ["时间", "预测发电量(kWh)"]
       comparison:  ["时间", "预测发电量(kWh)", "实际发电量(kWh)", "偏差(kWh)"]
     """
-    from backend.tools.weather_fetcher_tool import _extract_short_name
+    from backend.app.services.station_catalog_service import extract_short_name
 
     # 日期组件
     dt = datetime.strptime(predict_date, "%Y-%m-%d")
-    station_short = _extract_short_name(info["name"])
+    station_short = extract_short_name(info["name"])
 
     title = TITLE_TEMPLATES[data_type].format(
         station=station_short,

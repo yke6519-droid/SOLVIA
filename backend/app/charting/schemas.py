@@ -21,7 +21,7 @@ class DatasetArtifact(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     artifact_id: str
-    artifact_type: Literal["hourly_series", "daily_aggregate"]
+    artifact_type: Literal["hourly_series", "daily_aggregate", "tabular"]
     owner_user_id: int
     session_id: str
     field_schema: dict[str, FieldDefinition] = Field(alias="schema")

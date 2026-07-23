@@ -24,11 +24,14 @@ file_io_tool.py - 文件读写工具模块 (LangChain Tools)
 """
 import os
 import re
+import json
 from datetime import datetime
 from typing import Annotated, Optional
 
 from langchain_core.tools import tool, ToolException
 from dotenv import load_dotenv
+from backend.app.services.attachment_service import resolve_bound_attachment_path
+from backend.app.services.file_artifact_service import register_current_generated_file
 
 load_dotenv()
 
@@ -141,14 +144,14 @@ def write_file(
     content: Annotated[str, "要写入文件的完整内容"],
     filename: Annotated[str, "文件名(可选)。不传则根据内容自动生成。支持 .txt 和 .md 格式"] = "",
 ) -> str:
-    """将内容写入文件并返回文件路径。
+    """将内容写入文件并返回结构化文件产物信息。
 
     支持场景:用户要求创建文件、导出文件、导出分析结果、保存报告等。
     如果未指定文件名,会根据内容自动生成。
     支持格式:.txt(纯文本)、.md(Markdown)。
 
     返回:
-        写入成功后的文件完整路径
+        写入成功后的 file_id、文件名和文件大小；不返回服务器真实路径或下载链接。
     """
     if not FILE_DIR:
         raise ToolException("FILE_DIR 未配置,请在 .env 中设置 FILE_DIR")
@@ -175,28 +178,65 @@ def write_file(
     except Exception as e:
         raise ToolException(f"文件写入失败: {e}")
 
+    # 工具内部仍按原有方式落盘，但对 Agent 只返回 file_id，不暴露服务器真实路径。
+    artifact = register_current_generated_file(
+        filepath,
+        filename=filename,
+        source_tool="write_file",
+    )
+    if artifact and artifact.get("file_id"):
+        return json.dumps(
+            {
+                "status": "ready",
+                "result_type": "file",
+                "message": "文件已生成，可以下载",
+                "file": artifact,
+            },
+            ensure_ascii=False,
+        )
+    if artifact is not None:
+        return json.dumps(
+            {
+                "status": "generated_unregistered",
+                "result_type": "file",
+                "message": "文件已生成，但下载记录暂时不可用",
+                "file": None,
+            },
+            ensure_ascii=False,
+        )
+    # 离线直接调用工具时没有 Agent 请求上下文，保留原有兼容行为。
     return f"✅ 已写入文件: {filepath}"
 
 
 @tool
 def read_file(
-    filename: Annotated[str, "要读取的文件名,如 '英杰发电分析.md'"],
+    filename: Annotated[str, "要读取的历史文件名"] = "",
+    attachment_id: Annotated[str, "当前对话附件ID"] = "",
 ) -> str:
     """读取指定文件的内容。
 
-    支持场景:用户要求查看之前导出的文件、重新读取历史报告。
-    只能读取 temp/file 目录下的文件。支持 .txt 和 .md 格式。
+    支持场景:用户要求查看之前导出的文件、重新读取历史报告，或读取当前对话附件。
+    历史文件使用 filename，当前对话附件使用 attachment_id。
+    只能读取 temp/file 目录或服务端已授权的附件。支持 .txt 和 .md 格式。
 
     返回:
         文件的完整内容
     """
-    if not FILE_DIR:
-        raise ToolException("FILE_DIR 未配置,请在 .env 中设置 FILE_DIR")
+    if attachment_id:
+        try:
+            attachment, resolved_path = resolve_bound_attachment_path(attachment_id)
+        except Exception as exc:
+            raise ToolException(str(exc)) from exc
+        filename = attachment["filename"]
+        full_path = str(resolved_path)
+    else:
+        if not FILE_DIR:
+            raise ToolException("FILE_DIR 未配置,请在 .env 中设置 FILE_DIR")
 
-    # 路径安全:防止 ../ 路径穿越
-    full_path = os.path.normpath(os.path.join(FILE_DIR, filename))
-    if not full_path.startswith(os.path.normpath(FILE_DIR)):
-        raise ToolException("文件名包含非法路径")
+        # 路径安全:防止 ../ 路径穿越
+        full_path = os.path.normpath(os.path.join(FILE_DIR, filename))
+        if not full_path.startswith(os.path.normpath(FILE_DIR)):
+            raise ToolException("文件名包含非法路径")
 
     # 检查文件是否存在
     if not os.path.exists(full_path):
@@ -207,7 +247,19 @@ def read_file(
             hint = "当前目录为空"
         return f"⏳ 文件不存在: {filename}\n{hint}"
 
-    # 读取文件
+    # 表格文件不按文本打开。旧实现只支持 txt/md，直接 open Excel 会得到
+    # 二进制解码错误；现在统一转给 table_io_tool，并由它遍历完整工作簿。
+    ext = os.path.splitext(filename)[1].lower()
+    if ext in (".xlsx", ".xls", ".csv"):
+        from backend.tools.table_io_tool import (
+            _generate_workbook_summary,
+            _load_tabular_sheets,
+        )
+
+        sheets = _load_tabular_sheets(full_path, filename)
+        return _generate_workbook_summary(sheets, filename)
+
+    # 读取文本文件
     try:
         with open(full_path, "r", encoding="utf-8") as f:
             content = f.read()
@@ -233,23 +285,32 @@ def _format_file_size(size_bytes: int) -> str:
 
 @tool
 def verify_file(
-    filename: Annotated[str, "要校验的文件名,如 '英杰7月9日预测.xlsx'"],
+    filename: Annotated[str, "要校验的历史文件名"] = "",
+    attachment_id: Annotated[str, "当前对话附件ID"] = "",
 ) -> str:
     """校验文件是否成功生成。
 
-    在 write_file 或 export_table 生成文件后调用,验证文件确实存在且内容完整。
+    在 write_file 或 export_table 生成文件后调用，也可以校验当前对话附件。
     支持所有格式: .txt、.md、.xlsx、.xls、.csv。
 
     返回:
         校验结果(文件存在则返回大小、行列数等;不存在则报错)
     """
-    if not FILE_DIR:
-        raise ToolException("FILE_DIR 未配置,请在 .env 中设置 FILE_DIR")
+    if attachment_id:
+        try:
+            attachment, resolved_path = resolve_bound_attachment_path(attachment_id)
+        except Exception as exc:
+            raise ToolException(str(exc)) from exc
+        filename = attachment["filename"]
+        full_path = str(resolved_path)
+    else:
+        if not FILE_DIR:
+            raise ToolException("FILE_DIR 未配置,请在 .env 中设置 FILE_DIR")
 
-    # 路径安全:防止 ../ 路径穿越
-    full_path = os.path.normpath(os.path.join(FILE_DIR, filename))
-    if not full_path.startswith(os.path.normpath(FILE_DIR)):
-        raise ToolException("文件名包含非法路径")
+        # 路径安全:防止 ../ 路径穿越
+        full_path = os.path.normpath(os.path.join(FILE_DIR, filename))
+        if not full_path.startswith(os.path.normpath(FILE_DIR)):
+            raise ToolException("文件名包含非法路径")
 
     # 检查文件是否存在
     if not os.path.exists(full_path):
@@ -287,26 +348,23 @@ def verify_file(
             return f"❌ 文件校验失败: 文件存在但读取异常 - {e}"
 
     elif ext in (".xlsx", ".xls", ".csv"):
-        # 表格类:行列数 + 列名
+        # 表格类:完整工作簿的 Sheet 数量、行列数和列名。
         try:
-            if ext == ".csv":
-                import pandas as pd
-                df = pd.read_csv(full_path, encoding="utf-8-sig")
-            elif ext == ".xlsx":
-                import pandas as pd
-                df = pd.read_excel(full_path, engine="openpyxl")
-            else:  # .xls
-                import pandas as pd
-                df = pd.read_excel(full_path, engine="xlrd")
+            from backend.tools.table_io_tool import _load_tabular_sheets
 
-            rows, cols = df.shape
-            col_names = ", ".join(str(c) for c in df.columns)
+            sheets = _load_tabular_sheets(full_path, filename)
+            total_rows = sum(len(frame) for _, frame in sheets)
+            sheet_details = "; ".join(
+                f"{sheet_name}: {len(frame)} 行 × {len(frame.columns)} 列"
+                for sheet_name, frame in sheets
+            )
             return (
                 f"✅ 文件校验通过: {filename}\n"
                 f"  大小: {size_str}\n"
                 f"  创建时间: {ctime_str}\n"
-                f"  数据: {rows} 行 × {cols} 列\n"
-                f"  列名: {col_names}"
+                f"  Sheet 数量: {len(sheets)}\n"
+                f"  总数据行数: {total_rows}\n"
+                f"  Sheet 明细: {sheet_details}"
             )
         except Exception as e:
             return f"❌ 文件校验失败: 文件存在但解析异常 - {e}"

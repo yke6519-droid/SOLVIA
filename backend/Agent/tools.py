@@ -1,18 +1,19 @@
-from backend.tools.weather_fetcher_tool import (
-    get_current_datetime,
-    get_station_location,
-    get_weather_by_range
-)
+from backend.tools.weather_fetcher_tool import get_current_datetime, get_weather_by_range
 
 from backend.tools.pv_predictor import predict_power
 
 from backend.tools.power_query_tool import (
-    get_station_info,
     get_actual_power,
     get_actual_power_by_range,
     get_predicted_power,
     get_weather_records,
     get_power_comparison,
+)
+from backend.tools.station_query_tool import (
+    get_station_info,
+    get_station_location,
+    get_stations_by_region,
+    list_all_stations,
 )
 
 from backend.tools.file_io_tool import write_file, read_file, verify_file
@@ -22,12 +23,11 @@ from backend.tools.date_parser_tool import parse_date
 from backend.tools.ask_user_tool import ask_user
 from backend.tools.chart_plan_tool import get_power_dataset, create_chart_plan, get_chart_capabilities
 from backend.tools.import_tool import import_power_data
-from backend.app.services.station_scope import get_stations_by_region
-
 ALL_TOOLS = [
     # 站点查询类
     get_station_location,
     get_station_info,
+    list_all_stations,
     get_stations_by_region,
     # 时间查询类
     get_current_datetime,

@@ -15,8 +15,21 @@ const markdown = new MarkdownIt({
   typographer: false,
 })
 
+function removeGeneratedFileLinks(source) {
+  return String(source || '')
+    // 删除“文件路径/下载链接”整行，避免旧消息继续展示服务器路径。
+    .replace(/^\s*(?:[-*]\s*)?(?:文件路径|下载链接|下载地址|文件地址)\s*[:：].*(?:\r?\n|$)/gim, '')
+    // 删除指向受保护文件接口的 Markdown 链接和裸 URL。
+    .replace(/\[[^\]]*(?:点击下载|下载文件|下载)[^\]]*\]\((?:https?:\/\/[^)]*)?\/api\/files\/[^)]*\)/gi, '')
+    .replace(/(?:https?:\/\/[^\s)]+)?\/api\/files\/[^\s)]+/gi, '')
+    // 删除旧实现可能泄露的本地生成路径。
+    .replace(/`?(?:[A-Za-z]:[\\/]|\/)(?:temp|uploads?)[\\/][^`\s)]+`?/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 const renderedContent = computed(() => {
-  const source = String(props.content || '')
+  const source = removeGeneratedFileLinks(props.content)
   if (!source) return ''
 
   const html = markdown.render(source)

@@ -9,15 +9,14 @@ power_query_tool.py - 数据库查询工具模块 (LangChain Tools)
   - cache_manager 是缓存层(读+写+清理),本模块是查询层(只读),职责不混
 
 工具列表(@tool,暴露给 LLM):
-  1. get_station_info            查询站点信息(空则返回全部)
-  2. get_actual_power            查询单日实际发电量
-  3. get_actual_power_by_range   查询日期范围实际发电量
-  4. get_predicted_power         查询预测发电量(从缓存读)
-  5. get_weather_records         查询气象数据(从缓存读)
-  6. get_power_comparison        预测vs实际对比(JOIN查询)
+  1. get_actual_power            查询单日实际发电量
+  2. get_actual_power_by_range   查询日期范围实际发电量
+  3. get_predicted_power         查询预测发电量(从缓存读)
+  4. get_weather_records         查询气象数据(从缓存读)
+  5. get_power_comparison        预测vs实际对比(JOIN查询)
 
 内部函数(供其他模块复用):
-  _query_station_by_name         按名称模糊匹配站点(weather_fetcher 复用)
+  _query_station_by_name         站点目录兼容封装(旧模块复用)
   _query_actual_power            查实际发电量(pv_predictor 复用)
 
 TODO:
@@ -33,6 +32,10 @@ load_dotenv()
 
 from backend.tools.cache_manager import get_prediction_data_mode
 from backend.app.database import get_engine
+from backend.app.services.station_catalog_service import (
+    load_stations_from_db,
+    query_stations_by_region,
+)
 
 # MySQL 连接配置(与其他模块一致)
 MYSQL_URL = os.environ.get("MYSQL_URL")
@@ -43,130 +46,18 @@ MYSQL_URL = os.environ.get("MYSQL_URL")
 # ============================================================
 
 def _query_station_by_name(station_name: str = None) -> dict:
-    """
-    从 MySQL solar_station 表加载站点信息,支持模糊匹配。
+    """兼容旧内部调用，统一从站点目录 Service 读取站点。"""
+    stations = load_stations_from_db()
+    if station_name is None:
+        return stations
 
-    由 weather_fetcher_tool.get_station_location 调用,替代原来的 _load_stations_from_db。
-    返回格式与原函数完全一致,保证向后兼容。
+    from backend.app.services.station_resolver import resolve_station
 
-    参数:
-        station_name: 站点名称关键词。None 则返回全部站点。
-
-    返回:
-        dict: {站点简称: {station_id, name, lat, lon, capacity_kw, location}}
-              未匹配到则返回空 dict
-    """
-    engine = get_engine()
-    query = text("""
-        SELECT id, station_code, name, capacity_kw, location, province, city,
-               longitude, latitude
-        FROM solar_station
-        WHERE status = 1
-    """)
-
-    stations = {}
-    with engine.connect() as conn:
-        rows = conn.execute(query).fetchall()
-
-    for row in rows:
-        r = row._mapping
-        full_name = r["name"]
-        lat = float(r["latitude"]) if r["latitude"] is not None else None
-        lon = float(r["longitude"]) if r["longitude"] is not None else None
-        capacity = float(r["capacity_kw"]) if r["capacity_kw"] is not None else None
-
-        # 提取站点简称作为 key(复用 weather_fetcher 的逻辑)
-        from backend.tools.weather_fetcher_tool import _extract_short_name, _match_station
-        short_name = _extract_short_name(full_name)
-
-        stations[short_name] = {
-            "station_id": str(r["id"]),
-            "name": full_name,
-            "lat": lat,
-            "lon": lon,
-            "capacity_kw": capacity,
-            "location": r["location"] or "",
-            "province": r["province"] or "",
-            "city": r["city"] or "",
-        }
-
-    print(f"📋 从数据库加载 {len(stations)} 个站点: {list(stations.keys())}")
-
-    # 如果传了站点名,做模糊匹配返回单个
-    if station_name is not None:
-        from backend.tools.weather_fetcher_tool import _match_station
-        matched = _match_station(station_name, stations)
-        return matched if matched else {}
-
-    return stations
+    return resolve_station(station_name, stations=stations) or {}
 
 
-def _query_stations_by_region(
-    *,
-    region_keyword: str,
-    limit: int | None = None,
-) -> list[dict]:
-    """Query all active stations matching a region keyword.
-
-    This is deliberately a database-level collection query.  It does not go
-    through ``_match_station`` because a region is a requested set of sites,
-    not an ambiguous single-site name that needs user selection.
-    """
-    keyword = str(region_keyword or "").strip()
-    if not keyword:
-        raise ValueError("region_keyword is required")
-
-    engine = get_engine()
-    params: dict[str, object] = {"region_pattern": f"%{keyword}%"}
-
-    limit_clause = " LIMIT :limit" if limit is not None else ""
-    if limit is not None:
-        params["limit"] = int(limit)
-
-    query = text(
-        "SELECT id, name, capacity_kw, province, city, location, "
-        "longitude, latitude "
-        "FROM solar_station "
-        "WHERE status = 1 "
-        "AND (province LIKE :region_pattern "
-        "OR city LIKE :region_pattern "
-        "OR location LIKE :region_pattern "
-        "OR name LIKE :region_pattern) "
-        + " ORDER BY id"
-        + limit_clause
-    )
-
-    with engine.connect() as conn:
-        rows = conn.execute(query, params).fetchall()
-
-    stations: list[dict] = []
-    for row in rows:
-        item = row._mapping
-        stations.append(
-            {
-                "station_id": str(item["id"]),
-                "name": item["name"],
-                "capacity_kw": (
-                    float(item["capacity_kw"])
-                    if item["capacity_kw"] is not None
-                    else None
-                ),
-                "province": item["province"] or "",
-                "city": item["city"] or "",
-                "location": item["location"] or "",
-                "lat": (
-                    float(item["latitude"])
-                    if item["latitude"] is not None
-                    else None
-                ),
-                "lon": (
-                    float(item["longitude"])
-                    if item["longitude"] is not None
-                    else None
-                ),
-            }
-        )
-    return stations
+# 兼容 station_scope 等旧调用；真正的区域 SQL 已迁移到站点目录 Service。
+_query_stations_by_region = query_stations_by_region
 
 
 def _query_actual_power(station_id: str, predict_date: str) -> pd.DataFrame:
@@ -238,9 +129,10 @@ def _resolve_station_id(station_name: str) -> tuple:
         tuple: (station_id, station_info_dict)
         未匹配则抛 ToolException
     """
-    stations = _query_station_by_name()
-    from backend.tools.weather_fetcher_tool import _match_station
-    info = _match_station(station_name, stations)
+    stations = load_stations_from_db()
+    from backend.app.services.station_resolver import resolve_station
+
+    info = resolve_station(station_name, stations=stations)
     if info is None:
         available = list(stations.keys())
         raise ToolException(
@@ -270,42 +162,6 @@ def _format_power_summary(df: pd.DataFrame, label: str) -> str:
 # ============================================================
 # LangChain Tools (@tool, 暴露给 LLM)
 # ============================================================
-
-@tool
-def get_station_info(
-    station_name: Annotated[str, "站点名称、关键词或站点ID。传空字符串 '' 则返回全部站点列表"] = "",
-) -> str:
-    """查询光伏站点信息。
-
-    支持模糊匹配:站点简称、全名、站点ID、位置关键词均可作为输入。
-    返回站点ID、名称、经纬度、装机容量、位置描述等信息。
-    传空字符串则返回所有可用站点列表。
-    站点数据从 MySQL solar_station 表实时读取。
-
-    返回:
-        站点信息的文字描述。多个站点时返回列表。
-    """
-    if station_name.strip() == "":
-        # 返回全部站点
-        stations = _query_station_by_name()
-        lines = [f"共 {len(stations)} 个可用站点:"]
-        for key, info in stations.items():
-            lines.append(
-                f"  - {info['name']} (ID:{info['station_id']}, "
-                f"容量:{info['capacity_kw']}kW, 位置:{info['location']})"
-            )
-        return "\n".join(lines)
-
-    # 查单个站点
-    station_id, info = _resolve_station_id(station_name)
-    return (
-        f"站点: {info['name']}\n"
-        f"站点ID: {info['station_id']}\n"
-        f"经纬度: lat={info['lat']}, lon={info['lon']}\n"
-        f"装机容量: {info['capacity_kw']} kW\n"
-        f"位置: {info['location']}"
-    )
-
 
 @tool
 def get_actual_power(

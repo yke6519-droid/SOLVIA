@@ -9,8 +9,7 @@ weather_fetcher_tool.py - 气象数据拉取工具模块 (LangChain Tools)
 
 工具列表(@tool, 暴露给 LLM):
   1. get_weather_by_range     - 获取指定日期范围气象 (content + DataFrame)
-  2. get_station_location     - 根据站点名查经纬度 (文本)
-  3. get_current_datetime     - 获取当前日期时间 (文本)
+  2. get_current_datetime     - 获取当前日期时间 (文本)
 
 内部函数(非 @tool, 供 pv_predictor 等模块调用):
   - fetch_weather_by_date     - 按指定日期拉取单日气象(自动判断 archive/forecast)
@@ -36,7 +35,6 @@ load_dotenv()
 __all__ = [
     "fetch_weather_by_date",
     "get_weather_by_range",
-    "get_station_location",
     "get_current_datetime",
 ]
 
@@ -69,87 +67,17 @@ FORECAST_API = "https://api.open-meteo.com/v1/forecast"
 MYSQL_URL = os.getenv("MYSQL_URL")
 
 
-def _load_stations_from_db() -> dict:
-    """
-    从 MySQL solar_station 表加载所有启用的站点信息。
-
-    【已迁移】实际查询逻辑已迁移到 power_query_tool._query_station_by_name,
-    本函数保留为薄封装,保证向后兼容(weather_fetcher 内部其他函数仍调本函数)。
-
-    返回:
-        dict: {站点关键词: {station_id, name, lat, lon, capacity_kw, location}}
-    """
-    from backend.tools.power_query_tool import _query_station_by_name
-    return _query_station_by_name()
+# 兼容旧的内部导入：真正的站点目录逻辑已集中到 Service。
+# 这些别名不再承担数据库查询或匹配业务，只是避免预测、图表等旧模块立刻失效。
+from backend.app.services.station_catalog_service import (
+    extract_short_name as _extract_short_name,
+    load_stations_from_db as _load_stations_from_db,
+    match_all_stations as _match_all_stations,
+)
 
 
-def _extract_short_name(full_name: str) -> str:
-    """
-    从完整站点名中提取简称作为匹配 key。
-
-    规则:
-      "宁波海曙英杰250KW光伏"       → "英杰"       （去掉省市、容量、光伏）
-      "哲丰新材料清水站新增"         → "哲丰新材料清水站新增"（无省市前缀，直接用）
-      "浙江省-衢州市-哲丰3#造纸车间" → "哲丰3#造纸车间"（去掉"省-市-"前缀）
-
-    匹配策略：get_station_location 会同时用简称和全名做模糊匹配，
-    所以 key 提取不完美也没关系，全名也会参与匹配。
-    """
-    name = full_name
-
-    # 去掉 "省-市-" 前缀格式
-    if '-' in name:
-        parts = name.split('-')
-        if len(parts) >= 3:
-            name = '-'.join(parts[2:])
-
-    # 去掉容量标记 (250KW / 3MW / 400kWp 等)
-    import re
-    name = re.sub(r'\d+(?:\.\d+)?\s*(KW|kw|Kw|kWp|KWp|MW|mw|Mw|MWp)', '', name, flags=re.IGNORECASE)
-
-    # 去掉尾部"光伏""分布式电站""新增"等通用后缀
-    name = re.sub(r'(光伏|分布式电站|新增)$', '', name).strip()
-
-    return name if name else full_name
-
-
-def _match_all_stations(station_name: str, stations: dict) -> list:
-    """
-    模糊匹配站点，返回所有匹配结果（不含交互逻辑）。
-
-    参数:
-        station_name: 用户输入的站点名/关键词/ID
-        stations: _load_stations_from_db() 返回的站点字典
-
-    返回:
-        list: 所有匹配的站点信息列表，空列表表示无匹配
-    """
-    matches = []
-    for key, info in stations.items():
-        if (key in station_name or
-            station_name in info["name"] or
-            station_name == info["station_id"] or
-            station_name in info.get("location", "")):
-            matches.append(info)
-    return matches
-
-
-def _match_station(station_name: str, stations: dict) -> dict:
-    """
-    模糊匹配站点：支持简称、全名、站点ID、位置关键词多种匹配方式。
-
-    多个匹配时，通过 ask_user 工具让用户选择具体站点。
-    单个匹配直接返回，无匹配返回 None。
-
-    参数:
-        station_name: 用户输入的站点名/关键词/ID
-        stations: _load_stations_from_db() 返回的站点字典
-
-    返回:
-        dict: 匹配到的站点信息，未匹配返回 None
-    """
-    # Ambiguity handling and task-local caching live in the shared resolver.
-    # This keeps every caller consistent and avoids choosing a station twice.
+def _match_station(station_name: str, stations: dict) -> dict | None:
+    """兼容旧调用，统一交给任务级 StationResolver 处理歧义。"""
     from backend.app.services.station_resolver import resolve_station
 
     return resolve_station(station_name, stations=stations)
@@ -414,40 +342,6 @@ def get_weather_by_range(
         result, f"{start_date} ~ {end_date} 气象数据"
     )
     return summary, result
-
-
-@tool
-def get_station_location(
-    station_name: Annotated[str, "站点名称、关键词或站点ID，例如 '英杰'"],
-) -> str:
-    """根据站点名称、关键词或站点ID查询站点的位置信息。
-
-    支持模糊匹配：站点简称、站点全名、站点ID、位置关键词均可作为输入。
-    返回站点ID、名称、经纬度、装机容量、位置描述等信息。
-    其他天气工具需要的 lat/lon 参数可通过本工具获取。
-    站点数据从 MySQL solar_station 表实时读取。
-
-    返回:
-        站点信息的文字描述，包含经纬度、装机容量等。
-    """
-    # 从数据库加载所有站点
-    stations = _load_stations_from_db()
-    info = _match_station(station_name, stations)
-
-    if info is not None:
-        print(f"✅ 匹配到站点: {info['name']} (lat={info['lat']}, lon={info['lon']})")
-        return (
-            f"站点: {info['name']} (ID:{info['station_id']}) | "
-            f"经纬度: {info['lat']},{info['lon']} | "
-            f"装机: {info['capacity_kw']}kW"
-        )
-
-    available = list(stations.keys())
-    print(f"❌ 未找到站点: {station_name}")
-    print(f"   当前可用站点: {available}")
-    raise ToolException(
-        f"未找到站点: '{station_name}'。当前可用站点: {available}"
-    )
 
 
 @tool

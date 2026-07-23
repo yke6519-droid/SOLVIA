@@ -216,6 +216,9 @@ button { border: 0; cursor: pointer; }
 .message-meta { display: flex; gap: 12px; margin-bottom: 7px; color: var(--text-muted); font-family: 'Space Mono', monospace; font-size: 11px; }
 .message-card { padding: 13px 15px; color: var(--text-soft); border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--surface-soft); line-height: 1.55; }
 .message-card p { margin: 0; font-size: 14px; }
+.message-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.message-attachment-item { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 6px; font-size: 11px; }
+.message-attachment-item span { font-family: 'Space Mono', monospace; font-size: 9px; font-weight: 700; opacity: .72; }
 .user .message-card { color: var(--ink-on-accent); border-color: var(--accent); background: var(--accent); }
 .condition-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin: 15px 0; padding-top: 13px; border-top: 1px solid var(--task-border); }
 .condition-grid div { display: flex; flex-direction: column; gap: 4px; }
@@ -522,8 +525,26 @@ button { border: 0; cursor: pointer; }
 /* 对话密度微调 */
 .message-card:not(.result-card) { padding: 13px 15px; }
 
+/* Agent 回复卡片下方的本轮用量提示，不干扰正文和图表布局。 */
+.token-usage {
+  margin: 7px 2px 0;
+  color: var(--text-faint);
+  font-family: 'Space Mono', 'Cascadia Mono', monospace;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
 /* Markdown message renderer */
 .message-placeholder { margin: 0; color: var(--text-muted); font-size: 14px; line-height: 1.65; }
+.generated-files { display: grid; gap: 8px; margin-top: 14px; }
+.generated-file-card { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: 7px; background: color-mix(in srgb, var(--surface-active) 72%, transparent); }
+.generated-file-meta { display: flex; min-width: 0; align-items: center; gap: 9px; }
+.generated-file-meta > div { display: grid; min-width: 0; gap: 2px; }
+.generated-file-meta strong { overflow: hidden; color: var(--text-main); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.generated-file-meta small { color: var(--text-muted); font-size: 11px; }
+.generated-file-icon { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 26px; flex: 0 0 32px; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--border-subtle)); border-radius: 5px; font-family: 'Space Mono', monospace; font-size: 9px; }
+.generated-file-download { flex: 0 0 auto; padding: 7px 10px; color: var(--ink-on-accent); border: 0; border-radius: 5px; background: var(--accent); font-size: 12px; font-weight: 650; cursor: pointer; }
+.generated-file-download:hover { filter: brightness(1.08); }
 .markdown-message { color: inherit; font-size: 14px; line-height: 1.72; overflow-wrap: anywhere; }
 .markdown-message > :first-child { margin-top: 0; }
 .markdown-message > :last-child { margin-bottom: 0; }

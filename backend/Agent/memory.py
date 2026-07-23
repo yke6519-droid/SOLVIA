@@ -13,6 +13,7 @@ memory.py - Agent 多轮对话记忆模块
 """
 import json
 import logging
+from contextvars import ContextVar
 from typing import Any, Dict, Optional, List
 
 from langchain_core.language_models import BaseLanguageModel
@@ -21,6 +22,29 @@ from langchain.memory.chat_memory import BaseChatMemory
 from langchain.memory.summary import SummarizerMixin
 
 logger = logging.getLogger(__name__)
+
+# Agent 执行时会收到一些“仅供工具选择”的内部上下文（例如附件 ID、最近图表引用）。
+# 这些上下文不能随着 AgentExecutor 的 input 一起写入用户对话历史。
+# 使用 ContextVar 只绑定当前请求，避免不同会话之间共享或串写原始消息。
+_raw_user_message: ContextVar[Optional[str]] = ContextVar(
+    "solar_agent_raw_user_message",
+    default=None,
+)
+
+
+def bind_raw_user_message(message: str):
+    """绑定当前 Agent 请求真正由用户输入的原始文本。"""
+    return _raw_user_message.set(str(message or ""))
+
+
+def reset_raw_user_message(token) -> None:
+    """恢复请求开始前的 ContextVar 状态，防止上下文泄漏到后续请求。"""
+    _raw_user_message.reset(token)
+
+
+def get_raw_user_message() -> Optional[str]:
+    """读取当前请求绑定的原始用户文本；未绑定时返回 None。"""
+    return _raw_user_message.get()
 
 # ============================================================
 # 自定义 SQL 消息转换器（带 user_id）
@@ -90,6 +114,37 @@ class PersistentWindowSummaryMemory(BaseChatMemory, SummarizerMixin):
     @property
     def memory_variables(self) -> List[str]:
         return [self.memory_key]
+
+    def save_context(
+        self,
+        inputs: Dict[str, Any],
+        outputs: Dict[str, Any],
+    ) -> None:
+        """持久化对话时只保存原始用户输入，不保存内部 Agent 上下文。
+
+        AgentExecutor 收到的 input 可能已经被后端包装为“附件上下文 + 图表引用
+        + 用户原始任务”。模型需要这些信息来选工具，但它们不是用户真正说的话。
+        因此只在当前请求显式绑定了原始文本时替换 input 字段；其他调用路径保持
+        LangChain BaseChatMemory 的默认行为，避免影响测试、摘要和普通 Agent 调用。
+        """
+        raw_message = get_raw_user_message()
+        if raw_message is None:
+            super().save_context(inputs, outputs)
+            return
+
+        safe_inputs = dict(inputs)
+        input_key = getattr(self, "input_key", None)
+        if input_key and input_key in safe_inputs:
+            safe_inputs[input_key] = raw_message
+        elif "input" in safe_inputs:
+            # AgentExecutor 的标准输入键就是 input，覆盖它即可保持其它字段不变。
+            safe_inputs["input"] = raw_message
+        else:
+            # 无法确定输入键时不猜测，沿用原有行为，避免破坏其它链路。
+            super().save_context(inputs, outputs)
+            return
+
+        super().save_context(safe_inputs, outputs)
 
     # ============================================================
     # 读取: 每轮对话前触发

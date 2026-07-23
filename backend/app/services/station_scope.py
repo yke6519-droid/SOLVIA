@@ -8,13 +8,12 @@ continue to consume the returned structured station dictionaries.
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
-from langchain_core.tools import ToolException, tool
+from langchain_core.tools import ToolException
 
-from backend.tools.power_query_tool import _query_stations_by_region
+from backend.app.services.station_catalog_service import query_stations_by_region
 
 
 REGION_QUERY_MAX_STATIONS = 20
@@ -108,7 +107,7 @@ class StationScopeResolver:
         max_stations: int = REGION_QUERY_MAX_STATIONS,
     ) -> dict[str, Any]:
         normalized_region = normalize_region(region)
-        stations = _query_stations_by_region(
+        stations = query_stations_by_region(
             region_keyword=normalized_region,
             limit=max_stations + 1,
         )
@@ -122,25 +121,3 @@ class StationScopeResolver:
 
 
 station_scope_resolver = StationScopeResolver()
-
-
-@tool
-def get_stations_by_region(
-    region: str,
-    max_stations: int = REGION_QUERY_MAX_STATIONS,
-) -> str:
-    """查询一个省/市/地区下的全部有效光伏站点。
-
-    这是集合查询，不是单站点模糊匹配：即使返回多个站点，也不会调用
-    ask_user 让用户选择其中一个。数量超过限制时会停止，避免无边界批量预测。
-    """
-    if max_stations < 1 or max_stations > REGION_QUERY_MAX_STATIONS:
-        raise ToolException(
-            f"max_stations 必须在 1 到 {REGION_QUERY_MAX_STATIONS} 之间"
-        )
-
-    result = station_scope_resolver.resolve_region(
-        region,
-        max_stations=max_stations,
-    )
-    return json.dumps(result, ensure_ascii=False)

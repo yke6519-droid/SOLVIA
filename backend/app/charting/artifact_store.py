@@ -1,4 +1,4 @@
-"""Short-lived in-process storage for the first DatasetArtifact closure."""
+"""Short-lived in-process storage for the current DatasetArtifact turn."""
 
 from threading import RLock
 

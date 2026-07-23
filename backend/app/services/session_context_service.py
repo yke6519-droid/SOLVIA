@@ -121,3 +121,98 @@ def clear_active_station(session_id: str, user_id: int) -> None:
             },
         )
 
+
+def save_active_attachment(
+    session_id: str,
+    user_id: int,
+    attachment: dict[str, Any],
+) -> None:
+    """保存当前会话最近上传的附件引用，不保存真实路径。"""
+    compact_attachment = {
+        "attachment_id": attachment.get("attachment_id"),
+        "filename": attachment.get("filename"),
+        "content_type": attachment.get("content_type"),
+        "size_bytes": attachment.get("size_bytes"),
+        "status": attachment.get("status", "uploaded"),
+    }
+    if not compact_attachment["attachment_id"]:
+        return
+    engine = get_engine()
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(
+                "SELECT context_json FROM chat_session "
+                "WHERE session_id = :sid AND user_id = :uid FOR UPDATE"
+            ),
+            {"sid": session_id, "uid": user_id},
+        ).fetchone()
+        if row is None:
+            return
+        context = _decode_context(row[0])
+        # 存入上下文中
+        context["active_attachment"] = compact_attachment
+        conn.execute(
+            text(
+                "UPDATE chat_session SET context_json = :context_json "
+                "WHERE session_id = :sid AND user_id = :uid"
+            ),
+            {
+                "sid": session_id,
+                "uid": user_id,
+                "context_json": json.dumps(context, ensure_ascii=False),
+            },
+        )
+
+
+def save_active_chart(
+    session_id: str,
+    user_id: int,
+    chart: dict[str, Any],
+) -> None:
+    """Persist a compact reference to the latest durable chart snapshot.
+
+    The chart values stay in chart_snapshot_store. Session context only keeps
+    identifiers and display metadata so the next user turn can export the
+    previous chart without copying arrays into the prompt.
+    """
+    metadata = chart.get("metadata") if isinstance(chart, dict) else {}
+    metadata = metadata if isinstance(metadata, dict) else {}
+    compact_chart = {
+        "chart_id": chart.get("chart_id"),
+        "artifact_id": metadata.get("artifact_id"),
+        "title": chart.get("title"),
+        "chart_type": chart.get("chart_type"),
+        "capability_id": chart.get("capability_id"),
+    }
+    compact_chart = {
+        key: value
+        for key, value in compact_chart.items()
+        if value not in (None, "")
+    }
+    if not compact_chart.get("chart_id") and not compact_chart.get("artifact_id"):
+        return
+
+    engine = get_engine()
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(
+                "SELECT context_json FROM chat_session "
+                "WHERE session_id = :sid AND user_id = :uid FOR UPDATE"
+            ),
+            {"sid": session_id, "uid": user_id},
+        ).fetchone()
+        if row is None:
+            return
+        context = _decode_context(row[0])
+        context["active_chart"] = compact_chart
+        conn.execute(
+            text(
+                "UPDATE chat_session SET context_json = :context_json "
+                "WHERE session_id = :sid AND user_id = :uid"
+            ),
+            {
+                "sid": session_id,
+                "uid": user_id,
+                "context_json": json.dumps(context, ensure_ascii=False),
+            },
+        )

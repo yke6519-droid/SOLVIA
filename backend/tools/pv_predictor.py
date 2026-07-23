@@ -1120,7 +1120,7 @@ def predict_power(
         artifact: 预测结果 DataFrame（24行，列: time, hour, xgb, lgb, lstm, lstnet, fusion）
                   可供文件读写工具保存为 Excel。
     """
-    from backend.tools.weather_fetcher_tool import _load_stations_from_db
+    from backend.app.services.station_catalog_service import load_stations_from_db
     from backend.app.services.station_resolver import resolve_station
 
     # 【日期解析】支持标准日期、中文日期、M-D/M-D/M.D 简写及相对日期
@@ -1133,7 +1133,7 @@ def predict_power(
     # 【步骤1】只解析一次站点。解析器会在当前任务复用用户的选择，
     # 返回 station_id、全名、经纬度等结构化信息，避免文本工具再次匹配。
     print(f"\n🔍 查询站点信息: {station_name}")
-    stations = _load_stations_from_db()
+    stations = load_stations_from_db()
     station_info = resolve_station(station_name, stations=stations)
 
     if station_info is None:

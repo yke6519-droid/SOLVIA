@@ -1,4 +1,5 @@
-"""Persist structured chart snapshots separately from LangChain's internal message history."""
+"""Persist structured chart snapshots for historical conversations."""
+
 import json
 import logging
 from typing import Iterable, List
@@ -18,7 +19,6 @@ def _get_engine():
         return None
 
 
-# 获取最新一条消息的message_id
 def _latest_assistant_message_id(conn, session_id: str, user_id: int):
     rows = conn.execute(text(
         "SELECT id, message FROM message_store "
@@ -35,7 +35,6 @@ def _latest_assistant_message_id(conn, session_id: str, user_id: int):
     return None
 
 
-# 将图表快照数据入库
 def save_chart_snapshot(session_id: str, user_id: int, charts: Iterable[dict]) -> None:
     """Save the chart specs generated in one assistant turn."""
     chart_list = [item for item in charts if isinstance(item, dict)]
@@ -47,9 +46,7 @@ def save_chart_snapshot(session_id: str, user_id: int, charts: Iterable[dict]) -
         return
     try:
         with engine.begin() as conn:
-            # 拿到当前对话的message_id，作为图表快照的关联
             message_id = _latest_assistant_message_id(conn, session_id, user_id)
-            # 插入图表快照
             conn.execute(text(
                 "INSERT INTO chart_snapshot_store "
                 "(session_id, user_id, message_id, chart_data) "
@@ -64,7 +61,52 @@ def save_chart_snapshot(session_id: str, user_id: int, charts: Iterable[dict]) -
         logger.exception("图表历史快照保存失败，实时对话不受影响")
 
 
-# 加载图表快照数据返回给前端渲染
+def load_latest_chart_for_reference(
+    session_id: str,
+    user_id: int,
+    *,
+    chart_id: str | None = None,
+    artifact_id: str | None = None,
+) -> dict | None:
+    """Find the latest chart spec belonging to a session.
+
+    One snapshot row may contain multiple chart specs from one assistant turn.
+    The SQL query is ownership-scoped before JSON values are inspected.
+    """
+    engine = _get_engine()
+    if engine is None:
+        return None
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(
+                "SELECT chart_data FROM chart_snapshot_store "
+                "WHERE session_id = :sid AND user_id = :uid "
+                "ORDER BY id DESC LIMIT 100"
+            ), {"sid": session_id, "uid": user_id}).fetchall()
+        for row in rows:
+            try:
+                charts = json.loads(row[0])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(charts, dict):
+                charts = [charts]
+            if not isinstance(charts, list):
+                continue
+            for chart in charts:
+                if not isinstance(chart, dict):
+                    continue
+                metadata = chart.get("metadata")
+                metadata = metadata if isinstance(metadata, dict) else {}
+                if chart_id and chart.get("chart_id") == chart_id:
+                    return chart
+                if artifact_id and metadata.get("artifact_id") == artifact_id:
+                    return chart
+        return None
+    except SQLAlchemyError:
+        logger.warning("查询图表快照失败", exc_info=True)
+        return None
+
+
 def load_chart_snapshots(
     session_id: str,
     user_id: int,
@@ -87,29 +129,23 @@ def load_chart_snapshots(
                     f"message_id_{index}": message_id
                     for index, message_id in enumerate(selected_ids)
                 })
-                snapshot_filter = (
-                    f" AND (message_id IN ({placeholders}) OR message_id IS NULL)"
-                )
+                snapshot_filter = f" AND (message_id IN ({placeholders}) OR message_id IS NULL)"
             rows = conn.execute(text(
                 "SELECT message_id, chart_data, created_at "
                 "FROM chart_snapshot_store "
                 "WHERE session_id = :sid AND user_id = :uid"
                 f"{snapshot_filter} ORDER BY created_at, id"
             ), params).fetchall()
-        # 解析每一行的 chart_data JSON，返回一个列表，每个元素包含 message_id、charts 列表和 created_at
         snapshots = []
         for row in rows:
             try:
-                # chart_data 可能是单个对象或列表，统一转换为列表
                 charts = json.loads(row[1])
             except (TypeError, json.JSONDecodeError):
                 continue
             if isinstance(charts, dict):
-                # 如果是单个对象，包装成列表
                 charts = [charts]
             if not isinstance(charts, list):
                 continue
-            # 过滤掉非字典的元素，确保 charts 列表只包含字典
             snapshots.append({
                 "message_id": int(row[0]) if row[0] is not None else None,
                 "charts": [item for item in charts if isinstance(item, dict)],
@@ -131,4 +167,4 @@ def delete_chart_snapshots(session_id: str, user_id: int) -> None:
                 "DELETE FROM chart_snapshot_store WHERE session_id = :sid AND user_id = :uid"
             ), {"sid": session_id, "uid": user_id})
     except SQLAlchemyError:
-        logger.warning("图表历史快照删除失败", exc_info=True)
+        logger.warning("删除图表历史快照失败", exc_info=True)

@@ -11,6 +11,7 @@ from backend.app.dependencies.auth import get_current_user
 from backend.app.schemas.chat import SessionResponse, SessionRenameRequest
 from backend.app.services.agent_manager import agent_manager
 from backend.app.services.chart_snapshot_store import delete_chart_snapshots, load_chart_snapshots
+from backend.app.services.file_artifact_service import load_file_artifacts, sanitize_generated_file_text
 from backend.app.database import get_engine
 from backend.app.config import HISTORY_PAGE_SIZE, SESSION_PAGE_SIZE
 from backend.app.errors import AppError, ErrorCode
@@ -68,6 +69,22 @@ def _extract_user_content(raw_message: str) -> str:
         return str(payload.get("data", {}).get("content", "") or "")
     except (json.JSONDecodeError, TypeError, AttributeError):
         return ""
+
+
+def _extract_message_token_usage(payload: dict) -> dict | None:
+    """从消息 JSON 的 response_metadata 恢复历史 token 用量。"""
+    data = payload.get("data", {}) if isinstance(payload, dict) else {}
+    metadata = data.get("response_metadata", {}) if isinstance(data, dict) else {}
+    usage = metadata.get("token_usage") if isinstance(metadata, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    keys = {"input_tokens", "output_tokens", "total_tokens"}
+    if not any(key in usage for key in keys):
+        return None
+    try:
+        return {key: max(int(usage.get(key, 0) or 0), 0) for key in keys}
+    except (TypeError, ValueError):
+        return None
 
 
 def _get_session_metadata(session_id: str, user_id: int):
@@ -277,13 +294,16 @@ async def get_messages(
             if msg_type not in {"human", "user", "ai", "assistant"}:
                 continue
             role = "user" if msg_type in {"human", "user"} else "assistant"
-            content = msg.get("data", {}).get("content", "")
+            content = sanitize_generated_file_text(msg.get("data", {}).get("content", ""))
             item = {
                 "id": int(row[0]),
                 "role": role,
                 "content": content,
                 "created_at": str(row[2]),
             }
+            token_usage = _extract_message_token_usage(msg)
+            if token_usage:
+                item["token_usage"] = token_usage
             if role == "user" and not first_user_content:
                 first_user_content = str(content or "")
             message_index_by_id[int(row[0])] = len(messages)
@@ -308,6 +328,20 @@ async def get_messages(
         charts.extend(snapshot.get("charts", []))
         if charts:
             messages[target_index]["chart_data"] = charts[0]
+
+    # 生成文件和图表一样属于消息级产物；历史加载时恢复到原助手消息。
+    for file_artifact in load_file_artifacts(session_id, user_id, message_ids=message_ids):
+        target_index = message_index_by_id.get(file_artifact.get("message_id"))
+        if target_index is None and assistant_indices:
+            target_index = assistant_indices[-1]
+        if target_index is None:
+            continue
+        files = messages[target_index].setdefault("files", [])
+        if not any(item.get("file_id") == file_artifact.get("file_id") for item in files):
+            files.append({
+                key: file_artifact[key]
+                for key in ("file_id", "filename", "content_type", "size_bytes", "status")
+            })
 
     return {
         "session_id": session_id,
