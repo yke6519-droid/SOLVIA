@@ -24,8 +24,8 @@ watch(() => props.question, () => {
   replyInput.value = props.answer || ''
 })
 
-function updateAnswer(event) {
-  replyInput.value = event.target.value
+function updateAnswer(value) {
+  replyInput.value = value || ''
   emit('update:answer', replyInput.value)
 }
 
@@ -54,26 +54,33 @@ function submit() {
     <template v-if="isSubmitted">
       <div class="ask-user-submitted"><span>你的回复</span><strong>{{ submittedAnswer }}</strong></div>
     </template>
-    <form v-else class="ask-user-form" @submit.prevent="submit">
-      <textarea
+    <a-form v-else class="ask-user-form" @finish="submit">
+      <a-textarea
         :value="replyInput"
         class="ask-user-input"
-        rows="2"
-        maxlength="1000"
+        :rows="2"
+        :maxlength="1000"
         placeholder="输入确认、站点名称、日期或补充条件"
         :disabled="isSubmitting"
-        @input="updateAnswer"
+        @update:value="updateAnswer"
         @keydown.enter.exact.prevent="submit"
-      ></textarea>
+      />
       <div class="ask-user-actions">
         <span class="ask-user-hint">Enter 发送 · Shift + Enter 换行</span>
-        <button class="ask-user-submit" type="submit" :disabled="!canSubmit">
-          {{ isSubmitting ? '正在发送…' : '确认并继续' }}
+        <a-button
+          class="ask-user-submit"
+          type="primary"
+          html-type="button"
+          :disabled="!canSubmit"
+          :loading="isSubmitting"
+          @click="submit"
+        >
+          确认并继续
           <span aria-hidden="true">↗</span>
-        </button>
+        </a-button>
       </div>
-    </form>
-    <p v-if="error" class="ask-user-error">{{ error }}</p>
+    </a-form>
+    <a-alert v-if="error" class="ask-user-error" type="error" show-icon :message="error" />
   </section>
 </template>
 

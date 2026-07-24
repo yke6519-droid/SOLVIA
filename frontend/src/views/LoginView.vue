@@ -1,5 +1,6 @@
 <script setup>
 import { ref } from 'vue'
+import { ArrowRightOutlined, LockOutlined, UserOutlined } from '@ant-design/icons-vue'
 import { login, saveAuth } from '../api'
 import { useRouter } from '../router'
 
@@ -66,12 +67,46 @@ async function submitLogin() {
           <div class="login-card-heading"><p class="login-card-kicker">进入工作台</p><span class="login-card-signal"></span></div>
           <h2>欢迎回来</h2>
           <!-- <p class="login-card-intro">使用你的运营账号登录，继续处理光伏任务。</p> -->
-          <form class="login-form" @submit.prevent="submitLogin">
-            <label class="login-field"><span>用户名</span><input v-model="loginForm.username" type="text" name="username" autocomplete="username" placeholder="输入用户名" :disabled="isLoggingIn" /></label>
-            <label class="login-field"><span>密码</span><input v-model="loginForm.password" type="password" name="password" autocomplete="current-password" placeholder="输入密码" :disabled="isLoggingIn" /></label>
-            <p v-if="loginError" class="login-error" role="alert">{{ loginError }}</p>
-            <button class="login-submit" type="submit" :disabled="isLoggingIn">{{ isLoggingIn ? '正在验证…' : '进入 SolarAgent' }}<span aria-hidden="true">↗</span></button>
-          </form>
+          <a-form class="login-form" :model="loginForm" @finish="submitLogin">
+            <label class="login-field">
+              <span>用户名</span>
+              <a-input
+                v-model:value="loginForm.username"
+                name="username"
+                autocomplete="username"
+                placeholder="输入用户名"
+                :disabled="isLoggingIn"
+                size="large"
+              >
+                <template #prefix><UserOutlined /></template>
+              </a-input>
+            </label>
+            <label class="login-field">
+              <span>密码</span>
+              <a-input-password
+                v-model:value="loginForm.password"
+                name="password"
+                autocomplete="current-password"
+                placeholder="输入密码"
+                :disabled="isLoggingIn"
+                size="large"
+              >
+                <template #prefix><LockOutlined /></template>
+              </a-input-password>
+            </label>
+            <a-alert v-if="loginError" class="login-error" type="error" show-icon :message="loginError" />
+            <a-button
+              class="login-submit"
+              type="primary"
+              html-type="submit"
+              size="large"
+              block
+              :loading="isLoggingIn"
+            >
+              {{ isLoggingIn ? '正在验证…' : '进入 SolarAgent' }}
+              <ArrowRightOutlined />
+            </a-button>
+          </a-form>
           <!-- <div class="login-card-foot"><span>JWT 安全登录</span><span>凭证有效期由服务端控制</span></div> -->
         </div>
         <div class="login-card-shadow" aria-hidden="true"></div>
