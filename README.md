@@ -9,13 +9,13 @@ SolarAgent 是一个面向光伏电站运营场景的智能分析 Agent。系统
 - `shared/`：前后端共享配置。
 - `docs/`：架构设计、功能复盘和性能优化记录。
 
-> 本 README 按 2026-07-23 当前源码整理。旧版 `chart_tool.py` 仍保留在仓库中，但已经不在 Agent 工具注册表中；正式图表链路以 `get_chart_capabilities → get_power_dataset → create_chart_plan` 为准。
+> 本 README 按 2026-07-24 当前源码整理。旧版 `chart_tool.py` 仍保留在仓库中，但已经不在 Agent 工具注册表中；正式图表链路以 `get_chart_capabilities → get_power_dataset → create_chart_plan` 为准。
 
 ## 一、技术栈
 
 | 模块 | 技术 |
 | --- | --- |
-| 前端 | Vue 3、Vite、Axios、Fetch、ECharts、MarkdownIt、DOMPurify |
+| 前端 | Vue 3、Vite、Ant Design Vue、Pinia、Axios、Fetch、ECharts、MarkdownIt、DOMPurify |
 | 后端 | FastAPI、SSE、LangChain、Pydantic |
 | 数据库 | MySQL、SQLAlchemy、PyMySQL |
 | 认证 | JWT Access Token、HttpOnly Refresh Cookie、Argon2id |
@@ -110,8 +110,16 @@ Agent 输出文本中的服务器路径和 `/api/files/...` 下载链接会被�
 - “新建会话”实际行为为回到首页；只有第一次发送消息时才创建会话。
 - 首页三张快捷任务卡片只把短语填入输入框，不自动发送。
 - 会话列表支持游标分页、选择、重命名和删除。
+- 会话重命名使用独立的 `RenameSessionDialog` 组件，统一处理输入校验、字符数限制和提交状态。
 - 历史消息使用 `before_id` 游标向上分页，并在加载旧消息时保持滚动位置。
 - 同一会话、同一游标的前端历史请求会共享同一个 Promise，避免重复请求。
+
+#### 前端组件化与状态管理
+
+- 页面级布局拆分为 `WorkspaceLayout`、`AppHeader`、`SessionSidebar` 和会话内容组件。
+- 对话消息、输入框、确认卡片、图表、附件、导入弹窗和重命名弹窗均使用独立 Vue 组件。
+- 认证状态和会话基础状态由 Pinia store 管理；流式对话、会话历史、附件和导入流程由 composables 承担。
+- `App.vue` 负责页面级状态编排和跨组件事件协调，不再直接承载所有业务实现。
 
 #### 流式交互
 
@@ -275,11 +283,18 @@ solar_agent/
 │   ├── temp/                          文件读写测试及兼容运行目录
 │   └── tools/                         站点、天气、发电、预测、图表、文件与导入工具
 ├── frontend/
+│   ├── src/app/AppProvider.vue        Ant Design Vue 配置与全局主题
+│   ├── src/components/                对话、布局、图表、Markdown、附件、导入组件
+│   │   ├── conversation/              对话头部、消息流、输入框、重命名弹窗
+│   │   └── layout/                    顶部栏、会话侧栏
+│   ├── src/composables/               流式对话、历史、认证、附件、导入流程
+│   ├── src/layouts/WorkspaceLayout.vue 工作台页面布局
+│   ├── src/stores/                    Pinia 认证与会话状态
+│   ├── src/utils/                     消息解析与展示辅助函数
+│   ├── src/views/                     登录页与欢迎页
 │   ├── src/api.js                     REST、Blob 下载与 SSE 客户端
-│   ├── src/App.vue                    当前工作台状态与主页面
-│   ├── src/router.js                  轻量路由与登录守卫
-│   ├── src/components/                图表、Markdown、AskUser、附件、导入组件
-│   └── src/views/LoginView.vue        登录页
+│   ├── src/App.vue                    页面级状态编排与主入口
+│   └── src/router.js                  轻量路由与登录守卫
 ├── shared/pagination.json             前后端共享分页大小
 ├── docs/                              设计、复盘与学习文档
 ├── requirements.txt
@@ -445,8 +460,8 @@ npm run build
 
 1. **用户与站点权限**：已有基础角色字段，但系统管理员、站点运维人员和可访问站点范围尚未形成完整 RBAC。
 2. **站点仪表盘**：当前核心入口仍是自然语言工作台，尚未提供传统筛选条件式原始数据仪表盘。
-3. **前端状态管理**：尚未引入 Pinia，用户、认证、会话和流式状态主要集中在 `App.vue`。
-4. **前端模块拆分**：`App.vue` 仍超过五百行，需要继续拆成页面组件和组合式函数。
+3. **前端状态管理**：Pinia 已用于认证和会话基础状态；流式任务状态仍由页面级 composable 与 `App.vue` 协同管理，后续可继续收敛为更明确的任务状态模型。
+4. **前端模块拆分**：核心页面、对话组件和业务 composables 已完成拆分；`App.vue` 仍承担页面级编排，后续可继续拆为 workspace controller 或更细粒度 composables。
 5. **附件存储**：当前文件本体保存在本地 `FILE_DIR`；尚未迁移到阿里云 OSS 等对象存储。
 6. **Redis 缓存**：站点目录、会话列表和热点历史尚未接入 Redis；MySQL 是当前事实源。
 7. **历史会话性能**：已经完成游标分页、请求去重和有限消息加载，后续仍可做会话缓存、图表按需加载和虚拟列表。

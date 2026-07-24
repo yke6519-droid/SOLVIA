@@ -1,6 +1,6 @@
 # SolarAgent Frontend
 
-SolarAgent 前端是一个独立的 Vue 3 + Vite 单页工作台，当前已接入认证、会话管理、SSE 流式 Agent、AskUser、结构化 ECharts、对话附件、发电量导入、生成文件下载和历史结果恢复。
+SolarAgent 前端是一个独立的 Vue 3 + Vite 单页工作台，当前已接入认证、会话管理、SSE 流式 Agent、AskUser、结构化 ECharts、对话附件、发电量导入、生成文件下载和历史结果恢复。页面控件使用 Ant Design Vue，认证和会话基础状态使用 Pinia，业务流程通过组件和 composables 拆分。
 
 ## 技术栈
 
@@ -8,27 +8,38 @@ SolarAgent 前端是一个独立的 Vue 3 + Vite 单页工作台，当前已接�
 | --- | --- |
 | Vue 3 | 响应式状态和组件 |
 | Vite 6 | 开发服务器和生产构建 |
+| Ant Design Vue | 按钮、表单、弹窗、上传、空状态等界面组件 |
+| Pinia | 认证状态和会话基础状态管理 |
 | Axios | 普通 REST、刷新重放、附件上传、Blob 下载 |
 | Fetch + ReadableStream | `POST /api/chat/stream` SSE |
 | ECharts | 结构化图表渲染 |
 | MarkdownIt | Agent Markdown 渲染 |
 | DOMPurify | HTML 安全清洗 |
 
-当前未引入 Vue Router 和 Pinia。`src/router.js` 是项目自己的轻量路由守卫；主要页面和业务状态仍集中在 `App.vue`。
+当前未引入 Vue Router 包，`src/router.js` 是项目自己的轻量路由守卫；Pinia 已用于认证和会话基础状态。`App.vue` 只负责页面级状态编排，具体流程已拆到组件和 composables。
 
 ## 目录结构
 
 ```text
 frontend/
 ├── src/
+│   ├── app/
+│   │   └── AppProvider.vue             Ant Design Vue 配置与全局主题
 │   ├── components/
+│   │   ├── conversation/               对话头部、消息流、输入框、重命名弹窗
+│   │   ├── layout/                     顶部栏、会话侧栏
 │   │   ├── AskUserCard.vue
 │   │   ├── ConversationAttachmentPicker.vue
 │   │   ├── ImportDataDialog.vue
 │   │   ├── MarkdownMessage.vue
 │   │   └── PowerChart.vue
+│   ├── composables/                    认证、流式、历史、附件、导入流程
+│   ├── layouts/WorkspaceLayout.vue    工作台布局
+│   ├── stores/                         Pinia 认证与会话状态
+│   ├── utils/conversation.js           消息解析与展示辅助函数
 │   ├── views/
-│   │   └── LoginView.vue
+│       ├── LoginView.vue
+│       └── workspace/WelcomePanel.vue
 │   ├── api.js
 │   ├── App.vue
 │   ├── config.js
@@ -57,6 +68,7 @@ frontend/
 - 首次发送消息时才调用后端创建会话。
 - 首页快捷卡片只填充短语，不自动发送。
 - 会话列表支持加载更多、选择、重命名和删除。
+- 重命名使用 `RenameSessionDialog.vue`，不再依赖浏览器原生 `window.prompt`。
 - 历史消息支持向上分页加载。
 - 同一会话、同一分页游标的历史请求会去重。
 
@@ -177,6 +189,21 @@ Agent 生成文件时，SSE 只返回：
 
 后端会把用量写入助手消息 `response_metadata.token_usage`，因此历史会话也能恢复。
 
+## 组件化与状态边界
+
+当前前端按“页面编排、可复用组件、业务流程 composable、全局状态”分层：
+
+| 层级 | 代表文件 | 职责 |
+| --- | --- | --- |
+| 页面编排 | `App.vue`、`WorkspaceLayout.vue` | 组合页面、协调跨组件事件、决定当前工作区状态 |
+| 布局组件 | `AppHeader.vue`、`SessionSidebar.vue` | 顶部导航、主题切换、会话列表和会话操作 |
+| 对话组件 | `ConversationHeader.vue`、`ConversationMessageList.vue`、`ConversationComposer.vue` | 展示消息、输入、执行状态和用户交互 |
+| 业务组件 | `PowerChart.vue`、`AskUserCard.vue`、`ImportDataDialog.vue`、`RenameSessionDialog.vue` | 封装图表、确认、导入和重命名交互 |
+| 流程 composables | `useChatStream.js`、`useSessionHistory.js`、`useAttachmentWorkflow.js`、`useImportWorkflow.js`、`useAuthLifecycle.js` | 封装 API 调用、流式状态、分页、上传和认证续期 |
+| 全局状态 | `stores/auth.js`、`stores/session.js` | 保存用户认证信息和会话基础状态，避免组件之间直接互相依赖 |
+
+这种拆分保留了 `App.vue` 的页面控制能力，同时把接口调用和具体交互从单文件中移出，后续增加仪表盘、任务详情或权限功能时可以沿用同一边界。
+
 ## API 层
 
 `src/api.js` 维护两个 Axios 实例：
@@ -260,8 +287,8 @@ npm install
 
 ## 当前前端限制
 
-- `App.vue` 仍承担大部分工作台、认证、会话和流式状态，尚未完成模块化拆分。
-- 未引入 Pinia，登录态和全局业务状态仍由 `App.vue` 与 localStorage 管理。
+- 核心页面、对话组件和业务 composables 已完成拆分；`App.vue` 仍承担页面级编排，后续可继续拆为 workspace controller。
+- Pinia 已接入认证和会话基础状态；流式任务状态仍由 composable 与页面状态协同管理，后续可继续抽象任务状态模型。
 - 当前路由是自研轻量实现，只有登录页和工作台。
 - 尚未提供传统筛选式站点数据仪表盘。
 - 尚未提供通用的多 Sheet 工作簿浏览器。
