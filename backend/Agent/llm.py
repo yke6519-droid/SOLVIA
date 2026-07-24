@@ -22,7 +22,7 @@ def build_llm()-> ChatOpenAI:
         streaming=True,
         # 让 OpenAI 兼容接口在流式结束块中返回本轮 token 用量。
         stream_usage=True,
-        temperature=0.5,
+        temperature=0.1,
     )
     return llmClient
 
