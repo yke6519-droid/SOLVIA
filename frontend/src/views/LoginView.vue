@@ -40,8 +40,8 @@ async function submitLogin() {
     <header class="login-nav">
       <div class="brand-lockup">
         <div class="brand-mark"><span></span><span></span><span></span></div>
-        <div><div class="brand-name">SOLARAGENT</div>
-        <div class="brand-caption">光伏运营工作台</div>
+        <div><div class="brand-name">Solvia</div>
+        <div class="brand-caption">光伏运维智能工作台</div>
       </div>
       </div>
       <div class="login-nav-right">
@@ -62,7 +62,7 @@ async function submitLogin() {
         </div>
       </section>
 
-      <section class="login-card-wrap" aria-label="登录 SolarAgent">
+      <section class="login-card-wrap" aria-label="登录 Solvia">
         <div class="login-card">
           <div class="login-card-heading"><p class="login-card-kicker">进入工作台</p><span class="login-card-signal"></span></div>
           <h2>欢迎回来</h2>
@@ -103,7 +103,7 @@ async function submitLogin() {
               block
               :loading="isLoggingIn"
             >
-              {{ isLoggingIn ? '正在验证…' : '进入 SolarAgent' }}
+              {{ isLoggingIn ? '正在验证…' : '进入 Solvia' }}
               <ArrowRightOutlined />
             </a-button>
           </a-form>

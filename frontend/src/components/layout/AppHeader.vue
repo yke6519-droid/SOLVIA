@@ -30,8 +30,8 @@ defineEmits(['import-data', 'toggle-theme', 'open-settings'])
     <div class="brand-lockup">
       <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
       <div>
-        <div class="brand-name">SOLARAGENT</div>
-        <div class="brand-caption">自然语言驱动的光伏任务工作台</div>
+        <div class="brand-name">SOLVIA</div>
+        <div class="brand-caption">自然语言驱动的光伏运维智能工作台</div>
       </div>
     </div>
 

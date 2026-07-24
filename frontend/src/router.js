@@ -57,7 +57,7 @@ export function createRouter() {
 
 export function useRouter() {
   const router = inject(ROUTER_KEY)
-  if (!router) throw new Error('useRouter 必须在 SolarAgent 路由上下文中使用')
+  if (!router) throw new Error('useRouter 必须在 Solvia 路由上下文中使用')
   return router
 }
 
