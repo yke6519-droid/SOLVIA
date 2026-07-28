@@ -53,6 +53,10 @@ warnings.filterwarnings('ignore')
 MODEL_SUNNY = os.getenv("MODEL_SUNNY")
 MODEL_CLOUDY = os.getenv("MODEL_CLOUDY")
 
+# 神经网络模型格式：auto、savedmodel 或 keras。
+# auto 会优先读取 SavedModel，失败后回退到 .keras，兼容本地与 Docker 环境。
+MODEL_FORMAT = os.getenv("MODEL_FORMAT", "auto").strip().lower()
+
 # LSTM / LSTNet 的时间步长（训练时用的 24，预测时必须一致）
 TIME_STEP = 24
 
@@ -94,6 +98,46 @@ def radiation_stable_loss(y_true, y_pred):
 # ModelManager 把已加载的模型缓存在内存中，第二次调用直接返回缓存。
 # todo 目前 ModelManager 中仅是英杰站点预测模型的硬加载。
 #  如果后续有新站点模型加入，要把该方法写的更灵活一些。能够根据用户要求的站点进行动态加载。
+
+def _load_neural_model(model_dir: str, savedmodel_name: str, keras_name: str):
+    """兼容加载 SavedModel 与 .keras 模型。
+
+    MODEL_FORMAT 的行为：
+    - auto：优先读取 SavedModel；不存在或加载失败时回退到 .keras；
+    - savedmodel：强制只读取 SavedModel；
+    - keras：强制只读取 .keras。
+
+    这样本地可以继续使用原始 .keras，Docker 则可以使用转换后的 SavedModel。
+    """
+    savedmodel_path = os.path.join(model_dir, savedmodel_name)
+    keras_path = os.path.join(model_dir, keras_name)
+
+    if MODEL_FORMAT not in {"auto", "savedmodel", "keras"}:
+        raise ValueError(
+            "MODEL_FORMAT 只能是 auto、savedmodel 或 keras，"
+            f"当前值为: {MODEL_FORMAT}"
+        )
+
+    if MODEL_FORMAT in {"auto", "savedmodel"} and os.path.isdir(savedmodel_path):
+        try:
+            print(f" 加载 SavedModel: {savedmodel_path}")
+            return tf.keras.models.load_model(savedmodel_path, compile=False)
+        except Exception as exc:
+            # 显式要求 savedmodel 时不能静默回退，方便及时发现部署问题。
+            if MODEL_FORMAT == "savedmodel":
+                raise
+            print(f" SavedModel 加载失败，将回退 .keras: {exc}")
+
+    if MODEL_FORMAT in {"auto", "keras"} and os.path.isfile(keras_path):
+        print(f" 加载 .keras 模型: {keras_path}")
+        return tf.keras.models.load_model(keras_path, compile=False)
+
+    raise FileNotFoundError(
+        "未找到可用的神经网络模型。"
+        f" SavedModel={savedmodel_path}, .keras={keras_path},"
+        f" MODEL_FORMAT={MODEL_FORMAT}"
+    )
+
 
 class ModelManager:
     """
@@ -169,8 +213,10 @@ class ModelManager:
         # 每个模型文件的作用：
         #   xgb_model.model.pkl  — XGBoost 预测模型
         #   lgb_model.pkl        — LightGBM 预测模型
-        #   lstm_model.keras     — LSTM 深度学习模型
-        #   lstnet_model.keras   — LSTNet 深度学习模型
+        #   lstm_savedmodel/     — LSTM SavedModel 目录
+        #   lstnet_savedmodel/   — LSTNet SavedModel 目录
+        #   lstm_model.keras     — LSTM 传统模型文件（兼容旧环境）
+        #   lstnet_model.keras   — LSTNet 传统模型文件（兼容旧环境）
         #   scaler.pkl           — 特征标准化器
         #   feature_cols.txt     — 特征列名（模型训练时的特征顺序）
         #   ridge_*_correction.pkl — 4个Ridge回归纠偏模型
@@ -178,6 +224,8 @@ class ModelManager:
         model_paths = {
             "xgb": os.path.join(model_dir, "xgb_model.model.pkl"),
             "lgb": os.path.join(model_dir, "lgb_model.pkl"),
+            "lstm_savedmodel": os.path.join(model_dir, "lstm_savedmodel"),
+            "lstnet_savedmodel": os.path.join(model_dir, "lstnet_savedmodel"),
             "lstm": os.path.join(model_dir, "lstm_model.keras"),
             "lstnet": os.path.join(model_dir, "lstnet_model.keras"),
             "scaler": os.path.join(model_dir, "scaler.pkl"),
@@ -195,12 +243,21 @@ class ModelManager:
 
         # 【步骤4】加载所有模型
         # joblib.load 用于 pkl 文件（sklearn/xgboost/lightgbm 模型）
-        # tf.keras.models.load_model 用于 .keras 文件（需要自定义 loss 已注册）
+        # _load_neural_model 同时兼容 SavedModel 目录和 .keras 文件。
+        # compile=False 表示当前只做推理，不重新构建训练指标。
         scaler = joblib.load(model_paths["scaler"])
         xgb_model = joblib.load(model_paths["xgb"])
         lgb_model = joblib.load(model_paths["lgb"])
-        lstm = tf.keras.models.load_model(model_paths["lstm"])
-        lstnet = tf.keras.models.load_model(model_paths["lstnet"])
+        lstm = _load_neural_model(
+            model_dir,
+            "lstm_savedmodel",
+            "lstm_model.keras",
+        )
+        lstnet = _load_neural_model(
+            model_dir,
+            "lstnet_savedmodel",
+            "lstnet_model.keras",
+        )
 
         # 4个 Ridge 纠偏模型，分别纠正 4 个子模型的预测偏差
         corr = {
