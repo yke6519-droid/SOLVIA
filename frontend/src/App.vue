@@ -190,6 +190,7 @@ const {
   showToast,
   errorMessage,
   scrollToBottom,
+  scrollToBottomIfFollowing,
 })
 
 function useShortcut(text) {
@@ -228,6 +229,10 @@ async function confirmRenameSession(title) {
 
 function scrollToBottom() {
   return messageList.value?.scrollToBottom() || nextTick()
+}
+
+function scrollToBottomIfFollowing() {
+  return messageList.value?.scrollToBottomIfFollowing?.() || nextTick()
 }
 
 function resetWorkspaceState() {

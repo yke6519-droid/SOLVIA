@@ -36,6 +36,9 @@ const emit = defineEmits([
 ])
 
 const listElement = ref(null)
+// 用户距离底部较近时，流式输出自动跟随；用户主动上拉后暂停跟随。
+const shouldAutoFollow = ref(true)
+const AUTO_FOLLOW_THRESHOLD = 72
 
 function formatFileSize(value) {
   const size = Number(value || 0)
@@ -98,6 +101,16 @@ function getScrollMetrics() {
   }
 }
 
+function isNearBottom() {
+  const element = listElement.value
+  if (!element) return true
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= AUTO_FOLLOW_THRESHOLD
+}
+
+function handleScroll() {
+  shouldAutoFollow.value = isNearBottom()
+}
+
 async function restoreAfterPrepend(previousMetrics) {
   await nextTick()
   if (!listElement.value) return
@@ -106,9 +119,20 @@ async function restoreAfterPrepend(previousMetrics) {
     + (previousMetrics?.scrollTop || 0)
 }
 
-async function scrollToBottom() {
+async function scrollToBottom(options = {}) {
+  // 历史加载和新任务默认强制定位；流式事件会显式传入 force=false。
+  const force = options.force !== false
+  if (!force && !shouldAutoFollow.value) return
   await nextTick()
-  if (listElement.value) listElement.value.scrollTop = listElement.value.scrollHeight
+  // 等待 Vue 完成流式内容渲染后再次判断，避免用户在这一帧上拉时仍被拉到底部。
+  if (!force && !shouldAutoFollow.value) return
+  if (!listElement.value) return
+  listElement.value.scrollTop = listElement.value.scrollHeight
+  if (force) shouldAutoFollow.value = true
+}
+
+function scrollToBottomIfFollowing() {
+  return scrollToBottom({ force: false })
 }
 
 // 历史分页和流式对话只调用语义方法，不依赖子组件内部 DOM 结构。
@@ -116,11 +140,13 @@ defineExpose({
   getScrollMetrics,
   restoreAfterPrepend,
   scrollToBottom,
+  scrollToBottomIfFollowing,
 })
 </script>
 
 <template>
-  <div ref="listElement" class="message-list">
+  <div class="message-list-shell">
+    <div ref="listElement" class="message-list" @scroll="handleScroll">
     <a-button
       v-if="!isLoadingMessages && hasOlderMessages"
       class="load-older-button"
@@ -297,5 +323,14 @@ defineExpose({
         </div>
       </div>
     </article>
+    </div>
+    <a-button
+      v-if="!shouldAutoFollow && messages.length"
+      class="jump-to-latest"
+      size="small"
+      @click="scrollToBottom({ force: true })"
+    >
+      回到底部 ↓
+    </a-button>
   </div>
 </template>

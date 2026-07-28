@@ -31,6 +31,7 @@ export function useChatStream({
   showToast,
   errorMessage,
   scrollToBottom,
+  scrollToBottomIfFollowing,
 }) {
   const isReplying = ref(false)
   const abortController = ref(null)
@@ -205,6 +206,8 @@ export function useChatStream({
     abortController.value = new AbortController()
     const runController = abortController.value
     let streamFailed = false
+    // 新任务开始时保证用户刚发送的消息可见；后续事件尊重用户的滚动位置。
+    await scrollToBottom()
 
     try {
       await streamChat({
@@ -246,7 +249,7 @@ export function useChatStream({
             if (!assistantMessage.content && !assistantMessage.chartData) assistantMessage.content = 'Task completed.'
             pendingQuestion.value = null
           }
-          scrollToBottom()
+          scrollToBottomIfFollowing()
         },
       })
     } catch (error) {
@@ -272,7 +275,7 @@ export function useChatStream({
       if (abortController.value === runController) abortController.value = null
       isStreaming.value = false
       pendingQuestion.value = null
-      await scrollToBottom()
+      await scrollToBottomIfFollowing()
     }
   }
 
