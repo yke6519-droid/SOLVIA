@@ -41,6 +41,12 @@ from backend.app.services.file_artifact_service import (
     sanitize_generated_file_text,
 )
 from backend.app.charting.context import bind_chart_context, reset_chart_context
+from backend.app.runtime import (
+    RuntimeObserver,
+    bind_runtime_context,
+    get_runtime_context,
+    reset_runtime_context,
+)
 from backend.app.services.station_resolver import (
     bind_station_resolution_context,
     get_station_resolution_context,
@@ -366,6 +372,15 @@ def _process_agent_event(ev: dict):
     return None
 
 
+def _log_runtime_event(event) -> None:
+    """把 Runtime 旁路事件写入结构化日志，不改变外部 SSE 协议。"""
+
+    logger.info(
+        "runtime_event=%s",
+        event.model_dump(mode="json"),
+    )
+
+
 @router.post("/chat/stream")
 async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current_user)):
     """Execute the current user's session with SSE streaming output."""
@@ -415,6 +430,14 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
             nonlocal visible_output, usage_event_index
             # ContextVar 必须在 Agent 执行任务内部绑定，工具线程才能定位当前 session。
             bridge_token = agent_manager.bind_bridge(bridge)
+
+            runtime_context_token = bind_runtime_context(req.session_id, user_id)
+            runtime_observer = RuntimeObserver(
+                get_runtime_context(),
+                event_sink=_log_runtime_event,
+            )
+            runtime_observer.start()
+
             chart_context_token = bind_chart_context(req.session_id, user_id)
             active_dataset = persisted_context.get("active_dataset")
             active_dataset_id = (
@@ -443,6 +466,10 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
                 async for ev in executor.astream_events(
                     {"input": agent_input}, version="v2"
                 ):
+                    # Runtime 在现有 SSE 适配之前旁路观察原始 LangChain 事件；
+                    # 观察失败由 RuntimeObserver 自己隔离，不影响原业务事件。
+                    runtime_observer.observe(ev)
+                    
                     processed = _process_agent_event(ev)
                     if processed:
                         if processed[0] == "tool_start":
@@ -516,9 +543,12 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
                         final_token_usage,
                     )
                 task_succeeded = True
+                runtime_observer.finish(success=True)
             except asyncio.CancelledError:
+                runtime_observer.finish(cancelled=True)
                 raise
             except Exception as exc:
+                runtime_observer.finish(error=exc)
                 await queue.put(("error", _agent_error_event(exc)))
             finally:
                 # 解绑 ContextVar，避免泄漏
@@ -560,6 +590,7 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
                 reset_station_resolution_context(station_context_token)
                 reset_attachment_context(attachment_context_token)
                 reset_raw_user_message(raw_message_token)
+                reset_runtime_context(runtime_context_token)
                 # 在队列里放一个“完成”事件，包含最终完整输出
                 await queue.put(("done", {
                     "output": sanitize_generated_file_text(visible_output),
