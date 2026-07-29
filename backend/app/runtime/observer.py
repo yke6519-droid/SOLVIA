@@ -70,7 +70,22 @@ def _summarize_value(value: Any, *, key: str | None = None, depth: int = 0) -> A
             return value
         return f"{value[:_MAX_TEXT_LENGTH]}..."
     if isinstance(value, (list, tuple, set)):
-        # 列表可能包含大量原始数据，旁路只记录数量，不记录每一行内容。
+        # 普通列表可能包含大量原始数据，旁路只记录数量。
+        # ChartPlan 的 series 是安全的小对象列表，需要保留 field/name，
+        # 才能看清 Agent 每次尝试绑定了哪个字段，同时不记录原始数据行。
+        if key == "series" and depth < 3 and len(value) <= 10:
+            items = []
+            for item in value:
+                if not isinstance(item, dict):
+                    items.append({"type": type(item).__name__})
+                    continue
+                items.append({
+                    item_key: _summarize_value(item[item_key], key=item_key, depth=depth + 1)
+                    for item_key in ("field", "name")
+                    if item_key in item
+                })
+            return {"type": "list", "length": len(value), "items": items}
+        # 其他列表可能包含完整业务数据，旁路只记录数量，不记录每一行内容。
         return {"type": "list", "length": len(value)}
     if isinstance(value, dict):
         if depth >= 3:
@@ -351,6 +366,13 @@ class RuntimeObserver:
             code = _safe_text(mapping.get("code"))
             message = _safe_text(mapping.get("message"))
             retryable = bool(mapping.get("retryable", False))
+            # 图表工具等旧协议会把错误码放在 error 内部。Runtime 对外
+            # 统一提升到 ToolResult.code，避免 Policy/前端继续深挖 data。
+            nested_error = mapping.get("error")
+            if isinstance(nested_error, dict):
+                code = code or _safe_text(nested_error.get("code"))
+                message = message or _safe_text(nested_error.get("message"))
+                retryable = retryable or bool(nested_error.get("retryable", False))
             suggested_actions = [
                 str(item) for item in mapping.get("suggested_actions", [])
                 if item not in (None, "")

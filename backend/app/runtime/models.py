@@ -39,12 +39,26 @@ class RuntimeModel(BaseModel):
 
 
 class ToolSpec(RuntimeModel):
-    """Runtime 看到的工具描述，不复制业务 Tool 的实现。"""
+    """Runtime 看到的工具描述，不复制业务 Tool 的实现。
+
+    R2 开始使用这些执行属性做最小纵切检查；默认值保持与现有工具行为兼容，
+    不在这里直接实现确认、重试或持久化。
+    """
 
     name: str = Field(min_length=1)
     description: str = ""
-    # 保存 JSON Schema 摘要，供未来 Policy/审计使用；R1-A 不执行校验。
+    # 保存 JSON Schema 摘要，供 Runtime Policy 和审计使用；具体参数校验仍由原 Tool 执行。
     args_schema: dict[str, Any] = Field(default_factory=dict)
+    timeout_seconds: float | None = Field(default=None, gt=0)
+    max_attempts: int = Field(default=1, ge=1)
+    idempotent: bool = True
+    side_effect_level: str = Field(default="read", min_length=1)
+    requires_confirmation: bool = False
+    allowed_states: list[AgentRunState] = Field(
+        default_factory=lambda: [AgentRunState.RUNNING]
+    )
+    evidence_type: str | None = None
+    checkpoint_mode: str = Field(default="none", min_length=1)
 
 
 class ToolResult(RuntimeModel):
@@ -91,6 +105,9 @@ class RuntimeContext(RuntimeModel):
     state: AgentRunState = AgentRunState.CREATED
     started_at: datetime = Field(default_factory=_utc_now)
     call_count: int = Field(default=0, ge=0)
+    # call_count 由 R1 旁路观察统计；R2 单独统计已通过 Runtime 检查的调用，
+    # 避免“观察一次”和“预留一次”互相重复计算调用预算。
+    managed_call_count: int = Field(default=0, ge=0)
     # evidence 只保存结构化证据引用或摘要，不在此模型中持久化业务数据。
     evidence: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -104,4 +121,3 @@ class AgentEvent(RuntimeModel):
     event_type: AgentEventType
     payload: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=_utc_now)
-

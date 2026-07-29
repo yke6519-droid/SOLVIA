@@ -23,6 +23,9 @@ from backend.tools.date_parser_tool import parse_date
 from backend.tools.ask_user_tool import ask_user
 from backend.tools.chart_plan_tool import get_power_dataset, create_chart_plan, get_chart_capabilities
 from backend.tools.import_tool import import_power_data
+from backend.app.runtime import RuntimeEngine, wrap_tool
+
+
 ALL_TOOLS = [
     # 站点查询类
     get_station_location,
@@ -61,5 +64,18 @@ ALL_TOOLS = [
     import_power_data,
 ]
 
+
+# R2 先选择低风险只读工具做最小纵切，其他工具继续沿用 R1 的旁路观察。
+R2_MANAGED_TOOL_NAMES = {"get_station_location"}
+
+
 def get_all_tools():
-    return ALL_TOOLS
+    """返回 Agent 工具列表，保持原工具名和参数协议不变。"""
+
+    runtime_engine = RuntimeEngine()
+    return [
+        wrap_tool(tool, runtime_engine=runtime_engine)
+        if tool.name in R2_MANAGED_TOOL_NAMES
+        else tool
+        for tool in ALL_TOOLS
+    ]

@@ -1,7 +1,4 @@
-"""SOLVIA Runtime 公共模型入口。
-
-R1-A 只提供类型和异常定义；真正的 Agent 事件观察与工具接入放到后续阶段。
-"""
+"""SOLVIA Runtime 公共模型、旁路观察和 R2 执行入口。"""
 
 from backend.app.runtime.enums import (
     AgentEventType,
@@ -24,6 +21,12 @@ from backend.app.runtime.models import (
     ToolSpec,
 )
 from backend.app.runtime.observer import RuntimeObserver
+from backend.app.runtime.managed_tool import (
+    RuntimeEngine,
+    RuntimeManagedTool,
+    build_tool_spec,
+    wrap_tool,
+)
 
 __all__ = [
     "AgentEvent",
@@ -34,11 +37,15 @@ __all__ = [
     "PolicyAction",
     "PolicyDecision",
     "RuntimeContext",
+    "RuntimeEngine",
     "RuntimeFatalError",
+    "RuntimeManagedTool",
     "RuntimeObserver",
+    "build_tool_spec",
     "reset_runtime_context",
     "ToolInvocation",
     "ToolResult",
     "ToolResultStatus",
     "ToolSpec",
+    "wrap_tool",
 ]

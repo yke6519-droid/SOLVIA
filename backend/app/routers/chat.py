@@ -424,10 +424,14 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
         # 按模型 run 聚合 usage，避免 stream/end 两类事件重复计算。
         token_usage_by_run: dict[str, dict[str, int]] = {}
         usage_event_index = 0
+        # SSE 的 done/error 事件补充 Runtime run_id，方便前端和排障日志
+        # 将一轮用户任务与旁路 Runtime 事件关联起来。
+        runtime_run_id: str | None = None
+        runtime_state: str | None = None
 
         # 接口的“后台执行线程”，负责调用 Agent 并把内部事件放到队列里
         async def consume_agent():
-            nonlocal visible_output, usage_event_index
+            nonlocal visible_output, usage_event_index, runtime_run_id, runtime_state
             # ContextVar 必须在 Agent 执行任务内部绑定，工具线程才能定位当前 session。
             bridge_token = agent_manager.bind_bridge(bridge)
 
@@ -436,6 +440,7 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
                 get_runtime_context(),
                 event_sink=_log_runtime_event,
             )
+            runtime_run_id = get_runtime_context().run_id
             runtime_observer.start()
 
             chart_context_token = bind_chart_context(req.session_id, user_id)
@@ -543,13 +548,31 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
                         final_token_usage,
                     )
                 task_succeeded = True
-                runtime_observer.finish(success=True)
+                finished_event = runtime_observer.finish(success=True)
+                runtime_state = (
+                    finished_event.payload.get("state")
+                    if finished_event is not None
+                    else get_runtime_context().state.value
+                )
             except asyncio.CancelledError:
-                runtime_observer.finish(cancelled=True)
+                finished_event = runtime_observer.finish(cancelled=True)
+                runtime_state = (
+                    finished_event.payload.get("state")
+                    if finished_event is not None
+                    else get_runtime_context().state.value
+                )
                 raise
             except Exception as exc:
-                runtime_observer.finish(error=exc)
-                await queue.put(("error", _agent_error_event(exc)))
+                finished_event = runtime_observer.finish(error=exc)
+                runtime_state = (
+                    finished_event.payload.get("state")
+                    if finished_event is not None
+                    else get_runtime_context().state.value
+                )
+                error_payload = _agent_error_event(exc)
+                error_payload["run_id"] = runtime_run_id
+                error_payload["runtime_state"] = runtime_state
+                await queue.put(("error", error_payload))
             finally:
                 # 解绑 ContextVar，避免泄漏
                 if task_succeeded:
@@ -595,6 +618,8 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
                 await queue.put(("done", {
                     "output": sanitize_generated_file_text(visible_output),
                     "usage": _merge_token_usage(token_usage_by_run),
+                    "run_id": runtime_run_id,
+                    "runtime_state": runtime_state,
                 }))
         # 在锁内启动后台任务，消费 Agent 事件并发送 SSE
         async with lock:
