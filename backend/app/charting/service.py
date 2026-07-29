@@ -3,6 +3,10 @@
 from backend.app.charting.builders import build_aggregate_bar, build_multi_line, build_single_line
 from backend.app.charting.context import get_chart_context
 from backend.app.charting.errors import ChartValidationError
+from backend.app.charting.field_names import (
+    normalize_chart_field_references,
+    normalize_dataset_artifact,
+)
 from backend.app.charting.registry import CapabilityDefinition, get_capability
 from backend.app.charting.schemas import ChartPlan, ChartSpec, FieldDefinition, SeriesBinding
 from backend.app.charting.validators import validate_chart_plan
@@ -131,6 +135,9 @@ def resolve_chart_plan(plan: ChartPlan, artifact, capability: CapabilityDefiniti
 
 class ChartService:
     def create_chart(self, plan: ChartPlan) -> ChartSpec:
+        # 兼容旧模型偶尔提交的 power_kwh/time 等别名；真正进入校验和
+        # Builder 的 ChartPlan 始终使用 timestamp/value_kwh 标准字段。
+        plan = normalize_chart_field_references(plan)
         context = get_chart_context()
         try:
             # 生产请求使用通用数据制品服务，可从 MySQL 恢复；离线单元测试
@@ -145,6 +152,9 @@ class ChartService:
                     user_id=context.user_id,
                     session_id=context.session_id,
                 )
+            # 读取历史制品时也执行一次标准化，避免旧 schema 继续把别名
+            # 暴露给 ChartPlan 校验和前端。
+            artifact = normalize_dataset_artifact(artifact)
         except DatasetArtifactError as exc:
             raise ChartValidationError(exc.code, exc.message) from exc
         capability = get_capability(plan.capability_id)

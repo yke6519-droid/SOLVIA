@@ -481,7 +481,15 @@ def create_chart_plan(
         error["retryable"] = attempt < max_attempts
         error.setdefault("details", {})["attempt"] = attempt
         error["details"]["max_attempts"] = max_attempts
-        return json.dumps({"status": "rejected", "retryable": error["retryable"], "error": error}, ensure_ascii=False)
+        return json.dumps(
+            {
+                "status": "rejected",
+                "retryable": error["retryable"],
+                "capability_preflight": capability_preflight,
+                "error": error,
+            },
+            ensure_ascii=False,
+        )
     return json.dumps(
         {
             "status": "accepted",

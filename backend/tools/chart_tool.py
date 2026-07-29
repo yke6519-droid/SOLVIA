@@ -212,10 +212,11 @@ def _load_range_power_frames(station_id: str, start_date: str, end_date: str, da
     if data_type in {"actual", "comparison"}:
         actual = _query_actual_power_range(station_id, start_date, end_date)
         if len(actual):
-            actual = actual.rename(columns={"record_time": "timestamp", "power_kwh": "value"})
+            # 数据库字段在图表边界统一为 timestamp/value_kwh。
+            actual = actual.rename(columns={"record_time": "timestamp", "power_kwh": "value_kwh"})
             actual["timestamp"] = pd.to_datetime(actual["timestamp"])
-            actual["value"] = pd.to_numeric(actual["value"], errors="coerce").fillna(0.0)
-            frames["actual"] = actual[["timestamp", "value"]].sort_values("timestamp")
+            actual["value_kwh"] = pd.to_numeric(actual["value_kwh"], errors="coerce").fillna(0.0)
+            frames["actual"] = actual[["timestamp", "value_kwh"]].sort_values("timestamp")
 
     if data_type in {"predicted", "comparison"}:
         predicted_parts = []
@@ -228,10 +229,11 @@ def _load_range_power_frames(station_id: str, start_date: str, end_date: str, da
             )
             if predicted is None or len(predicted) == 0:
                 continue
-            predicted = predicted.rename(columns={"time": "timestamp", "fusion": "value"})
+            # prediction_cache 的 time/fusion 只在模型缓存边界存在。
+            predicted = predicted.rename(columns={"time": "timestamp", "fusion": "value_kwh"})
             predicted["timestamp"] = pd.to_datetime(predicted["timestamp"])
-            predicted["value"] = pd.to_numeric(predicted["value"], errors="coerce").fillna(0.0)
-            predicted_parts.append(predicted[["timestamp", "value"]])
+            predicted["value_kwh"] = pd.to_numeric(predicted["value_kwh"], errors="coerce").fillna(0.0)
+            predicted_parts.append(predicted[["timestamp", "value_kwh"]])
         if predicted_parts:
             frames["predicted"] = pd.concat(predicted_parts, ignore_index=True).sort_values("timestamp")
 
@@ -248,7 +250,7 @@ def _aggregate_range_frame(frame, granularity: str):
         work["label"] = work["timestamp"].dt.strftime("%Y-%m-%d")
     else:
         work["label"] = work["timestamp"].dt.strftime("%Y-%m-%d %H:%M")
-    grouped = work.groupby("label", sort=True)["value"].sum()
+    grouped = work.groupby("label", sort=True)["value_kwh"].sum()
     return {str(label): _safe_round(value) for label, value in grouped.items()}
 
 

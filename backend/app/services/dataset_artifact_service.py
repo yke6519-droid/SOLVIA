@@ -19,6 +19,14 @@ from sqlalchemy import text
 
 from backend.app.charting.artifact_store import artifact_store
 from backend.app.charting.errors import ChartValidationError
+from backend.app.charting.field_names import (
+    FieldNameCollisionError,
+    TIMESTAMP_FIELD,
+    VALUE_KWH_FIELD,
+    normalize_dataset_artifact,
+    normalize_dataset_frame_columns,
+    normalize_field_schema,
+)
 from backend.app.charting.schemas import DatasetArtifact, FieldDefinition
 from backend.app.database import get_engine
 
@@ -123,7 +131,7 @@ def _infer_field_schema(frame: pd.DataFrame) -> dict[str, FieldDefinition]:
     for column in frame.columns:
         name = str(column)
         lowered = name.lower()
-        if lowered in {"timestamp", "time", "datetime", "record_time"}:
+        if lowered == TIMESTAMP_FIELD:
             definition = FieldDefinition(type="datetime", role="time", label=name)
         elif lowered in {"date", "day"}:
             definition = FieldDefinition(type="date", role="date", label=name)
@@ -152,8 +160,17 @@ def create_dataset_artifact(
     if not isinstance(frame, pd.DataFrame):
         raise DatasetArtifactError("DATASET_INVALID", "数据制品必须来自 pandas.DataFrame")
 
-    safe_frame = frame.copy()
-    safe_frame.columns = [str(column) for column in safe_frame.columns]
+    try:
+        # 原始数据库/模型字段只在进入数据制品这一刻转换，避免污染底层
+        # 查询和预测代码；从这里开始，图表和导出只看到标准字段名。
+        safe_frame = normalize_dataset_frame_columns(frame)
+        safe_frame.columns = [str(column) for column in safe_frame.columns]
+        normalized_schema = normalize_field_schema(
+            field_schema or _infer_field_schema(safe_frame)
+        )
+    except FieldNameCollisionError as exc:
+        raise DatasetArtifactError("DATASET_FIELD_COLLISION", str(exc)) from exc
+
     rows = [
         {str(key): _json_safe(value) for key, value in row.items()}
         for row in safe_frame.to_dict(orient="records")
@@ -163,7 +180,7 @@ def create_dataset_artifact(
         artifact_type=artifact_type,
         owner_user_id=context.user_id,
         session_id=context.session_id,
-        schema=field_schema or _infer_field_schema(safe_frame),
+        schema=normalized_schema,
         rows=rows,
         metadata={
             **(metadata or {}),
@@ -273,17 +290,19 @@ def load_dataset_artifact(artifact_id: str) -> DatasetArtifact:
 
     context = get_dataset_context()
     try:
-        return artifact_store.get(
+        artifact = artifact_store.get(
             artifact_id,
             user_id=context.user_id,
             session_id=context.session_id,
         )
+        return normalize_dataset_artifact(artifact)
     except ChartValidationError:
-        return _load_persisted_artifact(
+        artifact = _load_persisted_artifact(
             artifact_id,
             user_id=context.user_id,
             session_id=context.session_id,
         )
+        return normalize_dataset_artifact(artifact)
 
 
 def resolve_dataset_for_export(artifact_id: str = "") -> DatasetArtifact:
@@ -323,14 +342,14 @@ def make_power_frame(
 
     result = pd.DataFrame(
         {
-            "timestamp": pd.to_datetime(frame[timestamp_column]),
+            TIMESTAMP_FIELD: pd.to_datetime(frame[timestamp_column]),
             "station": station_name,
             "source_type": source_type,
             "series_key": source_type,
-            "value_kwh": pd.to_numeric(frame[value_column], errors="coerce").fillna(0.0),
+            VALUE_KWH_FIELD: pd.to_numeric(frame[value_column], errors="coerce").fillna(0.0),
         }
     )
-    result["timestamp"] = result["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+    result[TIMESTAMP_FIELD] = result[TIMESTAMP_FIELD].dt.strftime("%Y-%m-%d %H:%M:%S")
     result.attrs.update(
         {
             "artifact_type": "hourly_series",
@@ -355,11 +374,11 @@ def register_power_frame(frame: pd.DataFrame) -> DatasetArtifact:
 
     attrs = dict(frame.attrs)
     schema = {
-        "timestamp": FieldDefinition(type="datetime", role="time", label="时间"),
+        TIMESTAMP_FIELD: FieldDefinition(type="datetime", role="time", label="时间"),
         "station": FieldDefinition(type="category", role="category", label="站点"),
         "source_type": FieldDefinition(type="category", role="category", label="数据来源"),
         "series_key": FieldDefinition(type="category", role="category", label="图表序列"),
-        "value_kwh": FieldDefinition(type="number", role="measure", label="发电量", unit="kWh"),
+        VALUE_KWH_FIELD: FieldDefinition(type="number", role="measure", label="发电量", unit="kWh"),
     }
     return create_dataset_artifact(
         frame,
