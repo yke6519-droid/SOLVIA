@@ -3,7 +3,12 @@
 from backend.app.runtime.enums import (
     AgentEventType,
     AgentRunState,
+    InteractionIntent,
+    InteractionState,
+    InteractionType,
+    IntentSource,
     PolicyAction,
+    RuntimeInteractionCode,
     ToolResultStatus,
 )
 from backend.app.runtime.context import (
@@ -14,20 +19,40 @@ from backend.app.runtime.context import (
     get_runtime_invocation_bridge,
     reset_runtime_context,
 )
-from backend.app.runtime.exceptions import RuntimeFatalError
+from backend.app.runtime.exceptions import RuntimeFatalError, RuntimeInteractionError
 from backend.app.runtime.models import (
     AgentEvent,
+    ConfirmationRequest,
+    InteractionResolution,
+    PendingInteraction,
+    UserIntent,
     PolicyDecision,
     RuntimeContext,
     ToolInvocation,
     ToolResult,
     ToolSpec,
 )
+from backend.app.runtime.interactions import make_confirmation_key
+from backend.app.runtime.interaction_service import (
+    InteractionTransport,
+    RuntimeInteractionService,
+)
+from backend.app.runtime.intent_interpreter import (
+    DeterministicIntentInterpreter,
+    HybridUserIntentInterpreter,
+    InteractionPolicy,
+    LLMIntentInterpreter,
+    UserIntentInterpreter,
+    normalize_user_reply,
+)
 from backend.app.runtime.observer import RuntimeObserver
 from backend.app.runtime.result_normalizer import ResultNormalizer
+from backend.app.runtime.state_machine import RuntimeStateMachine
 from backend.app.runtime.hooks import (
     BaseRuntimeHook,
     BudgetHook,
+    ConfirmationHook,
+    ConfirmationRequestBuilder,
     PolicyHook,
     RuntimeHook,
     RuntimeHookChain,
@@ -46,9 +71,26 @@ __all__ = [
     "AgentRunState",
     "BaseRuntimeHook",
     "BudgetHook",
+    "ConfirmationHook",
+    "ConfirmationRequest",
+    "ConfirmationRequestBuilder",
     "bind_runtime_context",
     "get_runtime_context",
     "get_runtime_invocation_bridge",
+    "InteractionState",
+    "InteractionIntent",
+    "InteractionResolution",
+    "InteractionType",
+    "InteractionTransport",
+    "IntentSource",
+    "DeterministicIntentInterpreter",
+    "HybridUserIntentInterpreter",
+    "InteractionPolicy",
+    "LLMIntentInterpreter",
+    "UserIntentInterpreter",
+    "normalize_user_reply",
+    "make_confirmation_key",
+    "PendingInteraction",
     "PolicyAction",
     "PolicyDecision",
     "PolicyHook",
@@ -56,11 +98,15 @@ __all__ = [
     "RuntimeContextBinding",
     "RuntimeEngine",
     "RuntimeFatalError",
+    "RuntimeInteractionError",
+    "RuntimeInteractionCode",
+    "RuntimeInteractionService",
     "RuntimeHook",
     "RuntimeHookChain",
     "RuntimeInvocationBridge",
     "RuntimeManagedTool",
     "RuntimeObserver",
+    "RuntimeStateMachine",
     "ResultNormalizer",
     "build_tool_spec",
     "reset_runtime_context",
@@ -68,6 +114,7 @@ __all__ = [
     "ToolResult",
     "ToolResultStatus",
     "ToolSpec",
+    "UserIntent",
     "StateHook",
     "wrap_tool",
 ]

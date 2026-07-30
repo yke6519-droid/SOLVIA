@@ -43,6 +43,7 @@ from backend.app.services.file_artifact_service import (
 from backend.app.charting.context import bind_chart_context, reset_chart_context
 from backend.app.runtime import (
     RuntimeObserver,
+    RuntimeInteractionError,
     bind_runtime_context,
     get_runtime_context,
     reset_runtime_context,
@@ -172,6 +173,14 @@ def _build_agent_input_with_context(
 
 def _agent_error_event(exc: Exception) -> dict:
     """Convert an Agent/tool exception into the stable SSE error payload."""
+    if isinstance(exc, RuntimeInteractionError):
+        return {
+            "code": exc.code,
+            "message": exc.message,
+            "status": 409,
+            "retryable": False,
+            "details": exc.details,
+        }
     if isinstance(exc, ToolError):
         return {
             "code": exc.code,

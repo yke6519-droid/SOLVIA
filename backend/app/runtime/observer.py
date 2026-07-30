@@ -17,7 +17,7 @@ from backend.app.runtime.enums import (
     AgentRunState,
     ToolResultStatus,
 )
-from backend.app.runtime.exceptions import RuntimeFatalError
+from backend.app.runtime.exceptions import RuntimeFatalError, RuntimeInteractionError
 from backend.app.runtime.models import (
     AgentEvent,
     RuntimeContext,
@@ -25,6 +25,7 @@ from backend.app.runtime.models import (
     ToolResult,
 )
 from backend.app.runtime.result_normalizer import ResultNormalizer
+from backend.app.runtime.state_machine import RuntimeStateMachine
 
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,18 @@ def _failure_info(error: Any) -> tuple[str, str, str, dict[str, Any]]:
             error.message,
             _summarize_value(error.details),
         )
+    if isinstance(error, RuntimeInteractionError):
+        failure_kind = (
+            "cancelled"
+            if error.run_state == AgentRunState.CANCELLED
+            else "blocked"
+        )
+        return (
+            failure_kind,
+            error.code,
+            error.message,
+            _summarize_value(error.details),
+        )
     if isinstance(error, ToolException):
         code = str(getattr(error, "code", "TOOL_ERROR"))
         message = str(getattr(error, "message", None) or error or "工具执行失败")
@@ -160,6 +173,7 @@ class RuntimeObserver:
         event_sink: EventSink | None = None,
         result_normalizer: ResultNormalizer | None = None,
         invocation_bridge: RuntimeInvocationBridge | None = None,
+        state_machine: RuntimeStateMachine | None = None,
     ) -> None:
         self.context = context
         self.events: list[AgentEvent] = []
@@ -170,6 +184,7 @@ class RuntimeObserver:
             or get_runtime_invocation_bridge(required=False)
             or RuntimeInvocationBridge()
         )
+        self._state_machine = state_machine or RuntimeStateMachine()
         self._pending_calls: dict[str, ToolInvocation] = {}
         self._finished = False
 
@@ -201,7 +216,11 @@ class RuntimeObserver:
 
         if self._finished:
             return self.events[-1]
-        self.context.state = AgentRunState.RUNNING
+        self._state_machine.transition(
+            self.context,
+            AgentRunState.RUNNING,
+            reason="run_started",
+        )
         return self._publish(
             AgentEventType.RUN_STARTED,
             payload={"state": self.context.state.value},
@@ -343,19 +362,55 @@ class RuntimeObserver:
         self._finished = True
 
         if cancelled:
-            self.context.state = AgentRunState.CANCELLED
+            self._state_machine.transition(
+                self.context,
+                AgentRunState.CANCELLED,
+                reason="run_cancelled",
+            )
             return self._publish(
                 AgentEventType.RUN_CANCELLED,
                 payload={"state": self.context.state.value},
             )
+
+        if isinstance(error, RuntimeInteractionError):
+            self._state_machine.transition(
+                self.context,
+                error.run_state,
+                reason="runtime_interaction_error",
+            )
+            failure_kind, code, message, details = _failure_info(error)
+            event_type = (
+                AgentEventType.RUN_CANCELLED
+                if error.run_state == AgentRunState.CANCELLED
+                else AgentEventType.RUN_FAILED
+            )
+            return self._publish(
+                event_type,
+                call_id=error.call_id,
+                payload={
+                    "state": self.context.state.value,
+                    "failure_kind": failure_kind,
+                    "code": code,
+                    "message": message,
+                    "details": details,
+                },
+            )
         if success:
-            self.context.state = AgentRunState.SUCCEEDED
+            self._state_machine.transition(
+                self.context,
+                AgentRunState.SUCCEEDED,
+                reason="run_succeeded",
+            )
             return self._publish(
                 AgentEventType.RUN_FINISHED,
                 payload={"state": self.context.state.value},
             )
 
-        self.context.state = AgentRunState.FAILED
+        self._state_machine.transition(
+            self.context,
+            AgentRunState.FAILED,
+            reason="run_failed",
+        )
         failure_kind, code, message, details = _failure_info(error)
         return self._publish(
             AgentEventType.RUN_FAILED,
