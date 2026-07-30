@@ -17,7 +17,7 @@ from backend.app.runtime.enums import (
     AgentRunState,
     ToolResultStatus,
 )
-from backend.app.runtime.exceptions import RuntimeFatalError
+from backend.app.runtime.exceptions import RuntimeFatalError, RuntimeInteractionError
 from backend.app.runtime.models import (
     AgentEvent,
     RuntimeContext,
@@ -125,6 +125,18 @@ def _failure_info(error: Any) -> tuple[str, str, str, dict[str, Any]]:
     if isinstance(error, RuntimeFatalError):
         return (
             "fatal",
+            error.code,
+            error.message,
+            _summarize_value(error.details),
+        )
+    if isinstance(error, RuntimeInteractionError):
+        failure_kind = (
+            "cancelled"
+            if error.run_state == AgentRunState.CANCELLED
+            else "blocked"
+        )
+        return (
+            failure_kind,
             error.code,
             error.message,
             _summarize_value(error.details),
@@ -347,6 +359,25 @@ class RuntimeObserver:
             return self._publish(
                 AgentEventType.RUN_CANCELLED,
                 payload={"state": self.context.state.value},
+            )
+        if isinstance(error, RuntimeInteractionError):
+            self.context.state = error.run_state
+            failure_kind, code, message, details = _failure_info(error)
+            event_type = (
+                AgentEventType.RUN_CANCELLED
+                if error.run_state == AgentRunState.CANCELLED
+                else AgentEventType.RUN_FAILED
+            )
+            return self._publish(
+                event_type,
+                call_id=error.call_id,
+                payload={
+                    "state": self.context.state.value,
+                    "failure_kind": failure_kind,
+                    "code": code,
+                    "message": message,
+                    "details": details,
+                },
             )
         if success:
             self.context.state = AgentRunState.SUCCEEDED

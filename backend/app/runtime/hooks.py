@@ -6,18 +6,26 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Iterable
 from typing import Any, Protocol
 
-from backend.app.runtime.enums import PolicyAction
-from backend.app.runtime.exceptions import RuntimeFatalError
+from backend.app.runtime.enums import (
+    AgentRunState,
+    InteractionState,
+    PolicyAction,
+    RuntimeInteractionCode,
+)
+from backend.app.runtime.exceptions import RuntimeFatalError, RuntimeInteractionError
 from backend.app.runtime.models import (
+    ConfirmationRequest,
     PolicyDecision,
     RuntimeContext,
     ToolInvocation,
     ToolResult,
     ToolSpec,
 )
+from backend.app.runtime.interaction_service import RuntimeInteractionService
 
 
 class RuntimeHook(Protocol):
@@ -211,6 +219,99 @@ class PolicyHook(BaseRuntimeHook):
         return decision
 
 
+ConfirmationRequestBuilder = Callable[
+    [RuntimeContext, ToolInvocation, ToolSpec],
+    ConfirmationRequest | None,
+]
+
+
+class ConfirmationHook(BaseRuntimeHook):
+    """R3 确认 Hook：只负责调度 Preflight 和交互服务。"""
+
+    def __init__(
+        self,
+        interaction_service: RuntimeInteractionService,
+        *,
+        request_builders: dict[str, ConfirmationRequestBuilder] | None = None,
+    ) -> None:
+        self._interaction_service = interaction_service
+        self._request_builders = dict(request_builders or {})
+
+    async def before_tool_call(
+        self,
+        context: RuntimeContext,
+        invocation: ToolInvocation,
+        spec: ToolSpec,
+    ) -> PolicyDecision | None:
+        """确认通过才允许工具继续；缓存命中等无需确认时直接放行。"""
+
+        if not spec.requires_confirmation:
+            return None
+
+        builder = self._request_builders.get(spec.name)
+        if builder is None:
+            request = ConfirmationRequest(
+                confirmation_key=f"{spec.name}:{invocation.call_id}",
+                question=f"请确认是否执行工具“{spec.name}”？",
+            )
+        else:
+            # Preflight 可能访问数据库或缓存，不能阻塞当前异步事件循环。
+            request = await asyncio.to_thread(builder, context, invocation, spec)
+
+        if request is None:
+            return PolicyDecision(
+                action=PolicyAction.ALLOW,
+                reason="Preflight 判断无需用户确认",
+                policy_name="r3_confirmation",
+            )
+
+        resolution = await self._interaction_service.arequest_confirmation(
+            context,
+            invocation,
+            confirmation_key=request.confirmation_key,
+            question=request.question,
+            timeout_seconds=request.timeout_seconds,
+            allowed_intents=request.allowed_intents,
+        )
+        if resolution.state == InteractionState.CONFIRMED:
+            return PolicyDecision(
+                action=PolicyAction.ALLOW,
+                reason="用户已确认工具调用",
+                policy_name="r3_confirmation",
+            )
+
+        run_state = (
+            AgentRunState.CANCELLED
+            if resolution.state == InteractionState.CANCELLED
+            else AgentRunState.BLOCKED
+        )
+        code = resolution.code or RuntimeInteractionCode.INVALID_RESPONSE
+        message = {
+            InteractionState.CANCELLED: "用户取消了本次工具调用。",
+            InteractionState.EXPIRED: "用户确认超时，工具未执行。",
+            InteractionState.REJECTED: "未收到明确确认，工具未执行。",
+        }.get(resolution.state, "交互未完成，工具未执行。")
+        raise RuntimeInteractionError(
+            code.value,
+            message,
+            run_state=run_state,
+            details={
+                "tool_name": spec.name,
+                "interaction_id": resolution.interaction_id,
+                "interaction_state": resolution.state.value,
+                # 只记录结构化意图摘要，不记录用户原始回复和 slots。
+                "intent": resolution.intent.value,
+                "intent_confidence": resolution.confidence,
+                "intent_source": resolution.source.value,
+                "allowed_intents": [
+                    intent.value for intent in request.allowed_intents
+                ],
+            },
+            run_id=context.run_id,
+            call_id=invocation.call_id,
+        )
+
+
 class RuntimeHookChain:
     """按注册顺序执行 RuntimeHook 的编排器。
 
@@ -285,6 +386,8 @@ class RuntimeHookChain:
 __all__ = [
     "BaseRuntimeHook",
     "BudgetHook",
+    "ConfirmationHook",
+    "ConfirmationRequestBuilder",
     "PolicyHook",
     "RuntimeHook",
     "RuntimeHookChain",

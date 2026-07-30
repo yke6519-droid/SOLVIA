@@ -28,10 +28,11 @@ import pandas as pd
 import joblib
 import tensorflow as tf
 from datetime import datetime, timedelta
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 from langchain_core.tools import tool, ToolException
 from dotenv import load_dotenv
 from backend.app.errors import ErrorCode, ToolError
+from backend.app.runtime import ConfirmationRequest, make_confirmation_key
 from backend.tools.date_parser_tool import parse_flexible_date
 
 # ============================================================
@@ -974,7 +975,8 @@ def _require_station_coordinates(
 def predict_station_power(station_name: str, lat: float, lon: float,
                           station_id: str,
                           predict_date: Optional[str] = None,
-                          history_date: Optional[str] = None) -> tuple:
+                          history_date: Optional[str] = None,
+                          confirmation_already_checked: bool = False) -> tuple:
     """
     站点整合：拉取气象 → ERA5转换 → 预测 → 历史对比 → 返回完整结果。
 
@@ -1048,7 +1050,10 @@ def predict_station_power(station_name: str, lat: float, lon: float,
 
     # 【确认门】只有缓存未命中、确实需要重新预测时才请求确认。
     # 这样图表/导出等复用本层的调用路径也不会绕过确认。
-    _request_prediction_confirmation(station_name, predict_date)
+    if not confirmation_already_checked:
+        # 兼容直接调用内部整合函数的旧入口；正式 Agent 入口由 R3
+        # ConfirmationHook 在工具执行前负责确认。
+        _request_prediction_confirmation(station_name, predict_date)
 
     print(f"\n 开始预测 {station_name} 站点 {predict_date} 发电量")
     print(f"   历史基准日: {history_date}")
@@ -1174,6 +1179,67 @@ def _request_prediction_confirmation(station_name: str, predict_date: str) -> st
     return answer
 
 
+def build_prediction_confirmation_request(
+    _context: Any,
+    invocation: Any,
+    _spec: Any,
+) -> ConfirmationRequest | None:
+    """R3 Preflight：缓存命中时返回 None，否则生成预测确认请求。
+
+    该函数只做确认前置判断，不加载模型、不请求天气，也不写缓存；真正的
+    预测仍由 predict_power 委托工具执行。
+    """
+
+    from backend.app.services.station_catalog_service import load_stations_from_db
+    from backend.app.services.station_resolver import resolve_station
+    from backend.tools.cache_manager import (
+        clean_prediction_cache,
+        get_prediction_data_mode,
+        read_prediction_cache,
+    )
+
+    arguments = invocation.arguments if isinstance(invocation.arguments, dict) else {}
+    station_name = str(arguments.get("station_name") or "").strip()
+    target_date = str(arguments.get("target_date") or "")
+    predict_date = parse_flexible_date(target_date)
+
+    stations = load_stations_from_db()
+    station_info = resolve_station(station_name, stations=stations)
+    if station_info is None:
+        raise ToolException(f"未找到站点: '{station_name}'")
+
+    lat = station_info["lat"]
+    lon = station_info["lon"]
+    station_id = station_info["station_id"]
+    full_name = station_info["name"]
+    _require_station_coordinates(full_name, station_id, lat, lon)
+
+    prediction_mode = get_prediction_data_mode(predict_date)
+    clean_prediction_cache()
+    cached_pred = read_prediction_cache(
+        station_id,
+        predict_date,
+        weather_data_mode=prediction_mode,
+    )
+    if cached_pred is not None:
+        return None
+
+    confirmation_key = make_confirmation_key(
+        "predict_power",
+        {"station_id": str(station_id), "target_date": predict_date},
+    )
+    question = (
+        "请确认预测条件：\n"
+        f"- 站点：{full_name}\n"
+        f"- 日期：{predict_date}\n\n"
+        "回复“确认”或“确定”开始预测；回复“取消”终止本次预测。"
+    )
+    return ConfirmationRequest(
+        confirmation_key=confirmation_key,
+        question=question,
+    )
+
+
 @tool(response_format="content_and_artifact")
 def predict_power(
     station_name: Annotated[str, "站点名称，例如 '英杰'"],
@@ -1239,6 +1305,7 @@ def predict_power(
         station_id=station_id,
         predict_date=predict_date,
         history_date=history_date,
+        confirmation_already_checked=True,
     )
 
     # 预测结果也是标准数据制品，即使用户不要求画图，也可以直接导出或复盘。

@@ -1,6 +1,9 @@
 from backend.tools.weather_fetcher_tool import get_current_datetime, get_weather_by_range
 
-from backend.tools.pv_predictor import predict_power
+from backend.tools.pv_predictor import (
+    build_prediction_confirmation_request,
+    predict_power,
+)
 
 from backend.tools.power_query_tool import (
     get_actual_power,
@@ -20,10 +23,16 @@ from backend.tools.file_io_tool import write_file, read_file, verify_file
 from backend.tools.table_io_tool import export_table, read_table
 from backend.tools.knowledge_base_tool import search_knowledge_base
 from backend.tools.date_parser_tool import parse_date
-from backend.tools.ask_user_tool import ask_user
+from backend.tools.ask_user_tool import ask_user, request_user_input
 from backend.tools.chart_plan_tool import get_power_dataset, create_chart_plan, get_chart_capabilities
 from backend.tools.import_tool import import_power_data
-from backend.app.runtime import RuntimeEngine, wrap_tool
+from backend.app.runtime import (
+    RuntimeEngine,
+    RuntimeInteractionService,
+    UserIntentInterpreter,
+    build_tool_spec,
+    wrap_tool,
+)
 
 
 ALL_TOOLS = [
@@ -65,17 +74,39 @@ ALL_TOOLS = [
 ]
 
 
-# R2 先选择低风险只读工具做最小纵切，其他工具继续沿用 R1 的旁路观察。
-R2_MANAGED_TOOL_NAMES = {"get_station_location"}
+# R3 将预测工具纳入 Runtime 管理，使 ConfirmationHook 能在真正执行前介入。
+RUNTIME_MANAGED_TOOL_NAMES = {"get_station_location", "predict_power"}
+# 保留旧常量名，避免已有测试或外部注册代码导入时产生不必要的兼容问题。
+R2_MANAGED_TOOL_NAMES = RUNTIME_MANAGED_TOOL_NAMES
 
 
-def get_all_tools():
+def get_all_tools(
+    *,
+    intent_interpreter: UserIntentInterpreter | None = None,
+):
     """返回 Agent 工具列表，保持原工具名和参数协议不变。"""
 
-    runtime_engine = RuntimeEngine()
+    interaction_service = RuntimeInteractionService(
+        request_user_input,
+        intent_interpreter=intent_interpreter,
+    )
+    runtime_engine = RuntimeEngine(
+        interaction_service=interaction_service,
+        confirmation_request_builders={
+            "predict_power": build_prediction_confirmation_request,
+        },
+    )
+
     return [
-        wrap_tool(tool, runtime_engine=runtime_engine)
-        if tool.name in R2_MANAGED_TOOL_NAMES
+        wrap_tool(
+            tool,
+            runtime_engine=runtime_engine,
+            runtime_spec=build_tool_spec(
+                tool,
+                requires_confirmation=tool.name == "predict_power",
+            ),
+        )
+        if tool.name in RUNTIME_MANAGED_TOOL_NAMES
         else tool
         for tool in ALL_TOOLS
     ]

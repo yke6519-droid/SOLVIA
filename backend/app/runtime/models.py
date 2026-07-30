@@ -15,7 +15,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.app.runtime.enums import (
     AgentEventType,
     AgentRunState,
+    IntentSource,
+    InteractionIntent,
+    InteractionState,
+    InteractionType,
     PolicyAction,
+    RuntimeInteractionCode,
     ToolResultStatus,
 )
 
@@ -96,6 +101,81 @@ class ToolInvocation(RuntimeModel):
     policy_decision: PolicyDecision | None = None
 
 
+class PendingInteraction(RuntimeModel):
+    """Runtime 当前挂起、等待用户处理的一次交互。"""
+
+    interaction_id: str = Field(
+        default_factory=lambda: _new_id("interaction"),
+        min_length=1,
+    )
+    run_id: str = Field(min_length=1)
+    # 确认通常发生在某个工具调用前，因此绑定对应 call_id 便于恢复和审计。
+    call_id: str | None = None
+    interaction_type: InteractionType = InteractionType.CONFIRMATION
+    allowed_intents: list[InteractionIntent] = Field(
+        default_factory=lambda: [
+            InteractionIntent.CONFIRM,
+            InteractionIntent.CANCEL,
+        ]
+    )
+    # 只保存业务指纹，不把站点名、日期等原始参数拼进 ID，避免泄露敏感输入。
+    confirmation_key: str = Field(min_length=1)
+    question: str = Field(min_length=1)
+    status: InteractionState = InteractionState.PENDING
+    created_at: datetime = Field(default_factory=_utc_now)
+    expires_at: datetime | None = None
+    resolved_at: datetime | None = None
+    response: str | None = None
+    resolved_intent: InteractionIntent | None = None
+    intent_confidence: float | None = Field(default=None, ge=0, le=1)
+    intent_source: IntentSource | None = None
+    # 只保存解释器给出的简短原因；日志不会记录用户原始回复或完整 slots。
+    intent_reason: str = ""
+    intent_slots: dict[str, Any] = Field(default_factory=dict)
+
+
+class InteractionResolution(RuntimeModel):
+    """一次用户回复被 Runtime 分类后的稳定结果。"""
+
+    interaction_id: str = Field(min_length=1)
+    state: InteractionState
+    code: RuntimeInteractionCode | None = None
+    response: str | None = None
+    intent: InteractionIntent = InteractionIntent.UNCLEAR
+    confidence: float = Field(default=0, ge=0, le=1)
+    source: IntentSource = IntentSource.FALLBACK
+    reason: str = ""
+    slots: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConfirmationRequest(RuntimeModel):
+    """ConfirmationHook 发给交互服务的一次确认请求。"""
+
+    confirmation_key: str = Field(min_length=1)
+    question: str = Field(min_length=1)
+    timeout_seconds: float | None = Field(default=None, gt=0)
+    allowed_intents: list[InteractionIntent] = Field(
+        default_factory=lambda: [
+            InteractionIntent.CONFIRM,
+            InteractionIntent.CANCEL,
+        ]
+    )
+
+
+class UserIntent(RuntimeModel):
+    """解释器对用户回复做出的结构化判断。
+
+    这个模型只描述“用户想表达什么”，不直接决定工具是否执行。
+    是否允许改变 Runtime 状态，仍然由 InteractionPolicy 负责。
+    """
+
+    intent: InteractionIntent = InteractionIntent.UNCLEAR
+    confidence: float = Field(default=0, ge=0, le=1)
+    source: IntentSource = IntentSource.FALLBACK
+    slots: dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+
+
 class RuntimeContext(RuntimeModel):
     """一次 Agent 运行共享的 Runtime 上下文。"""
 
@@ -108,6 +188,10 @@ class RuntimeContext(RuntimeModel):
     # call_count 由 R1 旁路观察统计；R2 单独统计已通过 Runtime 检查的调用，
     # 避免“观察一次”和“预留一次”互相重复计算调用预算。
     managed_call_count: int = Field(default=0, ge=0)
+    # 当前一次运行最多挂起一个交互；R3 后续会由交互服务负责推进它的状态。
+    pending_interaction: PendingInteraction | None = None
+    # 已结束的交互保留在当前运行上下文中，用于同一确认键去重和审计。
+    interaction_history: list[PendingInteraction] = Field(default_factory=list)
     # evidence 只保存结构化证据引用或摘要，不在此模型中持久化业务数据。
     evidence: list[dict[str, Any]] = Field(default_factory=list)
 

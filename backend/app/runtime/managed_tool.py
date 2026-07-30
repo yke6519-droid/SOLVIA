@@ -22,10 +22,13 @@ from backend.app.runtime.models import (
 )
 from backend.app.runtime.hooks import (
     BudgetHook,
+    ConfirmationHook,
+    ConfirmationRequestBuilder,
     PolicyHook,
     RuntimeHookChain,
     StateHook,
 )
+from backend.app.runtime.interaction_service import RuntimeInteractionService
 from backend.app.runtime.result_normalizer import ResultNormalizer
 
 
@@ -85,6 +88,8 @@ class RuntimeEngine:
         *,
         max_tool_calls: int = 20,
         result_normalizer: ResultNormalizer | None = None,
+        interaction_service: RuntimeInteractionService | None = None,
+        confirmation_request_builders: dict[str, ConfirmationRequestBuilder] | None = None,
     ) -> None:
         if max_tool_calls < 1:
             raise ValueError("max_tool_calls 必须大于等于 1")
@@ -93,11 +98,17 @@ class RuntimeEngine:
         self._budget_hook = BudgetHook(max_tool_calls)
         self._policy_hook = PolicyHook()
         self._result_normalizer = result_normalizer or ResultNormalizer()
-        # 当前默认链已经接入状态、预算和 Policy Hook；确认规则仍保留在
-        # RuntimeEngine，后续再迁移，避免一次性改变 R2 的执行语义。
-        self._hook_chain = RuntimeHookChain(
-            [self._state_hook, self._budget_hook, self._policy_hook]
-        )
+        hooks = [self._state_hook, self._budget_hook]
+        if interaction_service is not None:
+            hooks.append(
+                ConfirmationHook(
+                    interaction_service,
+                    request_builders=confirmation_request_builders,
+                )
+            )
+        # 确认 Hook 放在 Policy 之前，保持 R2 原有“确认先于 Policy”的语义。
+        hooks.append(self._policy_hook)
+        self._hook_chain = RuntimeHookChain(hooks)
 
     @property
     def hook_chain(self) -> RuntimeHookChain:
@@ -106,27 +117,27 @@ class RuntimeEngine:
         return self._hook_chain
 
     @staticmethod
+    def _restore_tool_output(tool: BaseTool, value: Any) -> Any:
+        """把 LangChain ToolMessage 恢复为外层 Wrapper 需要的原始形态。
+
+        delegate.arun 在带 tool_call_id 时会返回 ToolMessage；其中 content 是
+        给 Agent 的文本，artifact 是业务工具返回的原始制品。Runtime 不能只
+        取 content，否则 content_and_artifact 工具的 DataFrame 会丢失。
+        """
+
+        if hasattr(value, "content") and hasattr(value, "artifact"):
+            if tool.response_format == "content_and_artifact":
+                return value.content, value.artifact
+            return value.content
+        return value
+
+    @staticmethod
     def _arguments(value: Any) -> dict[str, Any]:
         """将工具输入转换成策略层可读取的对象摘要位置。"""
 
         if isinstance(value, dict):
             return value
         return {"value": value}
-
-    @staticmethod
-    def _check_confirmation(
-        context: RuntimeContext,
-        spec: ToolSpec,
-    ) -> None:
-        """保留 R2 的确认边界，等待后续 ConfirmationHook 接入。"""
-
-        if spec.requires_confirmation:
-            raise RuntimeFatalError(
-                "RUNTIME_CONFIRMATION_NOT_IMPLEMENTED",
-                f"工具 {spec.name} 需要用户确认，当前 R2 尚未接入确认状态机",
-                details={"tool_name": spec.name},
-                run_id=context.run_id,
-            )
 
     @staticmethod
     def _build_invocation(
@@ -197,8 +208,6 @@ class RuntimeEngine:
             arguments,
             source_run_id,
         )
-        # 确认尚未 Hook 化，先保持 R2 原有顺序：确认检查早于 Policy 判断。
-        self._check_confirmation(context, spec)
         decision = await self._hook_chain.run_before_tool_call(
             context,
             invocation,
@@ -214,10 +223,12 @@ class RuntimeEngine:
         # 前置 Hook 全部允许后才预留预算，确保 Policy DENY 不消耗调用次数。
         self._budget_hook.reserve(context, spec)
         try:
-            raw_output = await tool.ainvoke(
+            delegate_output = await tool.arun(
                 tool_input,
+                tool_call_id=source_run_id,
                 config={"callbacks": []},
             )
+            raw_output = self._restore_tool_output(tool, delegate_output)
 
         # Runtime 使用统一 ToolResult 进入后置 Hook；Agent 仍接收原始业务输出，
         # 避免 R2.5 结构重构改变现有工具和 Prompt 之间的返回协议。
