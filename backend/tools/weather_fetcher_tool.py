@@ -30,6 +30,7 @@ from typing import Annotated
 from langchain_core.tools import tool, ToolException
 import os
 from dotenv import load_dotenv
+from backend.app.errors import ErrorCode, ToolError
 load_dotenv()
 
 __all__ = [
@@ -65,6 +66,64 @@ FORECAST_API = "https://api.open-meteo.com/v1/forecast"
 
 # MySQL 连接配置（用于从 solar_station 表读取站点信息）
 MYSQL_URL = os.getenv("MYSQL_URL")
+
+
+def _validate_weather_coordinates(lat, lon) -> None:
+    """在请求天气服务前拦截缺失坐标，避免把 None 传给外部 API。"""
+
+    if lat is None or lon is None:
+        raise ToolError(
+            ErrorCode.STATION_COORDINATES_MISSING,
+            "站点缺少经纬度，无法获取天气数据。",
+            details={"latitude": lat, "longitude": lon},
+            retryable=False,
+        )
+
+
+def _read_weather_payload(response, *, endpoint: str) -> dict:
+    """把天气服务响应转换为字典，并隐藏底层 HTTP/JSON 异常细节。"""
+
+    try:
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise ToolError(
+            ErrorCode.UPSTREAM_ERROR,
+            "天气服务请求失败，请稍后重试。",
+            details={
+                "endpoint": endpoint,
+                "status_code": getattr(response, "status_code", None),
+            },
+            retryable=True,
+        ) from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        # 上游可能返回空响应或 HTML 错误页，不能把 JSONDecodeError 直接暴露给 Agent。
+        raise ToolError(
+            ErrorCode.WEATHER_API_INVALID_RESPONSE,
+            "天气服务返回的数据无法解析，请稍后重试。",
+            details={
+                "endpoint": endpoint,
+                "status_code": getattr(response, "status_code", None),
+                "content_type": response.headers.get("content-type")
+                if getattr(response, "headers", None)
+                else None,
+            },
+            retryable=True,
+        ) from exc
+
+    if not isinstance(payload, dict) or not isinstance(payload.get("hourly"), dict):
+        raise ToolError(
+            ErrorCode.WEATHER_API_INVALID_RESPONSE,
+            "天气服务返回的数据缺少 hourly 字段，请稍后重试。",
+            details={
+                "endpoint": endpoint,
+                "status_code": getattr(response, "status_code", None),
+            },
+            retryable=True,
+        )
+    return payload
 
 
 # 兼容旧的内部导入：真正的站点目录逻辑已集中到 Service。
@@ -128,9 +187,9 @@ def _fetch_from_archive(lat, lon, start_date, end_date, station_id=None):
         "hourly": ",".join(VARIABLES),
         "timezone": "Asia/Shanghai",
     }
+    _validate_weather_coordinates(lat, lon)
     response = requests.get(ARCHIVE_API, params=params, timeout=60)
-    response.raise_for_status()
-    data = response.json()
+    data = _read_weather_payload(response, endpoint=ARCHIVE_API)
     df = pd.DataFrame(data["hourly"])
     df['time'] = pd.to_datetime(df['time'])
     df = df.sort_values("time").reset_index(drop=True)
@@ -175,9 +234,9 @@ def _fetch_from_forecast(lat, lon, start_date, end_date, station_id=None):
         "start_date": start_date,
         "end_date": end_date,
     }
+    _validate_weather_coordinates(lat, lon)
     response = requests.get(FORECAST_API, params=params, timeout=60)
-    response.raise_for_status()
-    data = response.json()
+    data = _read_weather_payload(response, endpoint=FORECAST_API)
     df = pd.DataFrame(data["hourly"])
     df['time'] = pd.to_datetime(df['time'])
     df = df.sort_values("time").reset_index(drop=True)

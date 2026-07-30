@@ -85,19 +85,6 @@ def _requires_all_station_tool(message: str) -> bool:
     return not has_region or has_system_scope
 
 
-def _called_tool_names(result: object) -> set[str]:
-    """从非流式 Agent 结果的 intermediate_steps 提取真实工具名。"""
-    if not isinstance(result, dict):
-        return set()
-    names: set[str] = set()
-    for step in result.get("intermediate_steps", []) or []:
-        if isinstance(step, (list, tuple)) and step:
-            name = getattr(step[0], "tool", None)
-            if name:
-                names.add(str(name))
-    return names
-
-
 def _raise_fact_tool_required() -> None:
     """阻止没有真实站点工具调用的“已查询”伪成功结果。"""
     raise ToolError(
@@ -654,96 +641,6 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
                     logger.exception("摘要生成失败")
     # 返回一个 SSE 响应，ping 每 15 秒发送一次心跳
     return EventSourceResponse(event_generator(), ping=15)
-
-
-@router.post("/chat")
-async def chat(req: ChatRequest, current_user: dict = Depends(get_current_user)):
-    """Non-streaming compatibility endpoint."""
-    user_id = current_user["user_id"]
-    _verify_session_ownership(req.session_id, user_id)
-    lock = agent_manager.get_lock(req.session_id)
-    if lock.locked():
-        raise AppError(ErrorCode.SESSION_BUSY, "当前会话正在处理请求", status_code=409, retryable=True)
-
-    # 首条用户消息到达时创建/补齐会话名称；手动重命名不会被覆盖。
-    ensure_session_title(req.session_id, user_id, req.message)
-
-    executor = agent_manager.get_agent(req.session_id, user_id=user_id)
-    persisted_context = load_session_context(req.session_id, user_id)
-    attachments = _load_request_attachments(req, persisted_context, user_id)
-    agent_input = _build_agent_input_with_context(req.message, attachments, persisted_context)
-    active_station = persisted_context.get("active_station")
-    if not isinstance(active_station, dict):
-        active_station = None
-    chart_context_token = bind_chart_context(req.session_id, user_id)
-    active_dataset = persisted_context.get("active_dataset")
-    active_dataset_id = (
-        str(active_dataset.get("artifact_id"))
-        if isinstance(active_dataset, dict) and active_dataset.get("artifact_id")
-        else None
-    )
-    dataset_context_token = bind_dataset_context(
-        req.session_id,
-        user_id,
-        active_dataset_artifact_id=active_dataset_id,
-    )
-    station_context_token = bind_station_resolution_context(
-        active_station=active_station,
-    )
-    attachment_context_token = bind_attachment_context(
-        req.session_id,
-        user_id,
-        attachments,
-    )
-    raw_message_token = bind_raw_user_message(req.message)
-    task_succeeded = False
-    try:
-        async with lock:
-            result = await asyncio.to_thread(executor.invoke, {"input": agent_input})
-            if _requires_all_station_tool(req.message):
-                called_tools = _called_tool_names(result)
-                if "list_all_stations" not in called_tools:
-                    _raise_fact_tool_required()
-            task_succeeded = True
-    finally:
-        if task_succeeded:
-            dataset_context = get_dataset_context(required=False)
-            if dataset_context and dataset_context.active_dataset_artifact_id:
-                try:
-                    dataset = load_dataset_artifact(
-                        dataset_context.active_dataset_artifact_id
-                    )
-                    await asyncio.to_thread(
-                        save_active_dataset,
-                        req.session_id,
-                        user_id,
-                        dataset_reference(dataset),
-                    )
-                except Exception:
-                    logger.exception("保存会话最近数据制品引用失败")
-            context = get_station_resolution_context()
-            selected_station = (
-                context.last_user_selected_station
-                if context is not None
-                else None
-            )
-            if selected_station:
-                try:
-                    await asyncio.to_thread(
-                        save_active_station,
-                        req.session_id,
-                        user_id,
-                        selected_station,
-                    )
-                except Exception:
-                    logger.exception("保存会话级站点上下文失败")
-        reset_chart_context(chart_context_token)
-        reset_dataset_context(dataset_context_token)
-        reset_station_resolution_context(station_context_token)
-        reset_attachment_context(attachment_context_token)
-        reset_raw_user_message(raw_message_token)
-    summary_task_manager.schedule(req.session_id, executor.memory)
-    return {"output": result.get("output", str(result)) if isinstance(result, dict) else str(result)}
 
 
 @router.post("/chat/{session_id}/reply")

@@ -2,31 +2,31 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from datetime import datetime, timezone
+from typing import Any
 
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool, ToolException
 from pydantic import PrivateAttr
 
-from backend.app.runtime.context import get_runtime_context
+from backend.app.runtime.context import (
+    get_runtime_context,
+    get_runtime_invocation_bridge,
+)
 from backend.app.runtime.enums import AgentRunState, PolicyAction
 from backend.app.runtime.exceptions import RuntimeFatalError
 from backend.app.runtime.models import (
     PolicyDecision,
     RuntimeContext,
+    ToolInvocation,
     ToolSpec,
 )
-
-
-class RuntimePolicyEvaluator(Protocol):
-    """R2 使用的最小策略评估接口。"""
-
-    def __call__(
-        self,
-        context: RuntimeContext,
-        spec: ToolSpec,
-        arguments: dict[str, Any],
-    ) -> PolicyDecision:
-        """根据当前运行上下文返回一次策略决定。"""
+from backend.app.runtime.hooks import (
+    BudgetHook,
+    PolicyHook,
+    RuntimeHookChain,
+    StateHook,
+)
+from backend.app.runtime.result_normalizer import ResultNormalizer
 
 
 def _schema_snapshot(args_schema: Any) -> dict[str, Any]:
@@ -73,37 +73,37 @@ def build_tool_spec(
     )
 
 
-def _default_allow_policy(
-    _context: RuntimeContext,
-    _spec: ToolSpec,
-    _arguments: dict[str, Any],
-) -> PolicyDecision:
-    """R2 默认策略：只读工具在基础检查通过后允许执行。"""
-
-    return PolicyDecision(
-        action=PolicyAction.ALLOW,
-        reason="R2 默认策略允许只读工具执行",
-        policy_name="r2_default_allow",
-    )
-
-
 class RuntimeEngine:
-    """R2 的最小执行控制器。
+    """R2/R2.5 的工具执行生命周期编排器。
 
-    当前只负责执行前状态、调用预算和基础 Policy 检查，然后把调用交给
-    原始 LangChain Tool。它不复制业务代码，也不在 R2 迁移用户确认逻辑。
+    已迁移的状态、预算和 Policy 规则由 Hook 实现；本类只编排异步工具
+    生命周期、确认边界和原始 LangChain Tool 委托，不复制业务代码。
     """
 
     def __init__(
         self,
         *,
         max_tool_calls: int = 20,
-        policy_evaluator: RuntimePolicyEvaluator | None = None,
+        result_normalizer: ResultNormalizer | None = None,
     ) -> None:
         if max_tool_calls < 1:
             raise ValueError("max_tool_calls 必须大于等于 1")
         self.max_tool_calls = max_tool_calls
-        self.policy_evaluator = policy_evaluator or _default_allow_policy
+        self._state_hook = StateHook()
+        self._budget_hook = BudgetHook(max_tool_calls)
+        self._policy_hook = PolicyHook()
+        self._result_normalizer = result_normalizer or ResultNormalizer()
+        # 当前默认链已经接入状态、预算和 Policy Hook；确认规则仍保留在
+        # RuntimeEngine，后续再迁移，避免一次性改变 R2 的执行语义。
+        self._hook_chain = RuntimeHookChain(
+            [self._state_hook, self._budget_hook, self._policy_hook]
+        )
+
+    @property
+    def hook_chain(self) -> RuntimeHookChain:
+        """返回当前 Runtime 使用的 Hook Chain，便于后续注册新规则。"""
+
+        return self._hook_chain
 
     @staticmethod
     def _arguments(value: Any) -> dict[str, Any]:
@@ -113,37 +113,12 @@ class RuntimeEngine:
             return value
         return {"value": value}
 
-    def check(
-        self,
+    @staticmethod
+    def _check_confirmation(
+        context: RuntimeContext,
         spec: ToolSpec,
-        arguments: dict[str, Any],
-    ) -> PolicyDecision:
-        """执行工具前完成 R2 的确定性检查，并预留一次调用预算。"""
-
-        context = get_runtime_context()
-        if context.state not in spec.allowed_states:
-            raise RuntimeFatalError(
-                "RUNTIME_TOOL_STATE_NOT_ALLOWED",
-                f"工具 {spec.name} 不允许在 {context.state.value} 状态执行",
-                details={
-                    "tool_name": spec.name,
-                    "state": context.state.value,
-                    "allowed_states": [state.value for state in spec.allowed_states],
-                },
-                run_id=context.run_id,
-            )
-
-        if context.managed_call_count >= self.max_tool_calls:
-            raise RuntimeFatalError(
-                "RUNTIME_TOOL_BUDGET_EXCEEDED",
-                f"Runtime 工具调用预算已用尽: {self.max_tool_calls}",
-                details={
-                    "tool_name": spec.name,
-                    "max_tool_calls": self.max_tool_calls,
-                    "managed_call_count": context.managed_call_count,
-                },
-                run_id=context.run_id,
-            )
+    ) -> None:
+        """保留 R2 的确认边界，等待后续 ConfirmationHook 接入。"""
 
         if spec.requires_confirmation:
             raise RuntimeFatalError(
@@ -153,52 +128,125 @@ class RuntimeEngine:
                 run_id=context.run_id,
             )
 
-        decision = self.policy_evaluator(context, spec, arguments)
-        if decision.action != PolicyAction.ALLOW:
-            raise RuntimeFatalError(
-                "RUNTIME_POLICY_DENIED",
-                f"Runtime Policy 不允许执行工具 {spec.name}",
-                details={
-                    "tool_name": spec.name,
-                    "action": decision.action.value,
-                    "policy_name": decision.policy_name,
-                    "reason": decision.reason,
-                },
-                run_id=context.run_id,
-            )
-
-        # 预算按“通过 Runtime 检查并准备执行”计数；底层工具失败也不应无限重放。
-        context.managed_call_count += 1
-        return decision
-
-    def execute(
-        self,
-        tool: BaseTool,
+    @staticmethod
+    def _build_invocation(
+        context: RuntimeContext,
         spec: ToolSpec,
-        tool_input: Any,
-    ) -> Any:
-        """同步执行一次原始工具，关闭嵌套回调以避免 R1 旁路重复记账。"""
+        arguments: dict[str, Any],
+        source_run_id: str | None = None,
+    ) -> ToolInvocation:
+        """为 Hook 取得调用信封；有外部 run_id 时与 Observer 共享对象。"""
 
-        # 非流式兼容接口当前尚未绑定 RuntimeContext；保留原工具行为，
-        # 等后续明确非流式接口策略后再统一接入 Runtime 控制。
-        if get_runtime_context(required=False) is None:
-            return tool.invoke(tool_input, config={"callbacks": []})
-        self.check(spec, self._arguments(tool_input))
-        return tool.invoke(tool_input, config={"callbacks": []})
+        if source_run_id:
+            bridge = get_runtime_invocation_bridge()
+            return bridge.get_or_create(
+                source_run_id,
+                context=context,
+                tool_name=spec.name,
+                arguments=arguments,
+                replace_arguments=True,
+            )
+        return ToolInvocation(
+            run_id=context.run_id,
+            tool_name=spec.name,
+            arguments=arguments,
+        )
+
+    @staticmethod
+    def _raise_for_hook_decision(
+        context: RuntimeContext,
+        spec: ToolSpec,
+        decision: PolicyDecision,
+        *,
+        call_id: str | None = None,
+    ) -> None:
+        """将 Hook 的非允许决定转换为当前 R2 的结构化 Runtime 错误。"""
+
+        if decision.action == PolicyAction.ALLOW:
+            return
+        raise RuntimeFatalError(
+            "RUNTIME_POLICY_DENIED",
+            f"Runtime Policy 不允许执行工具 {spec.name}",
+            details={
+                "tool_name": spec.name,
+                "action": decision.action.value,
+                "policy_name": decision.policy_name,
+                "reason": decision.reason,
+            },
+            run_id=context.run_id,
+            call_id=call_id,
+        )
 
     async def aexecute(
         self,
         tool: BaseTool,
         spec: ToolSpec,
         tool_input: Any,
+        *,
+        source_run_id: str | None = None,
     ) -> Any:
         """异步执行一次原始工具，保持 LangChain 的异步调用语义。"""
 
-        # 与同步入口保持一致，避免 R2 改造影响尚未接入 Runtime 的调用方。
-        if get_runtime_context(required=False) is None:
-            return await tool.ainvoke(tool_input, config={"callbacks": []})
-        self.check(spec, self._arguments(tool_input))
-        return await tool.ainvoke(tool_input, config={"callbacks": []})
+        # RuntimeManagedTool 是受治理工具；缺少上下文时必须失败，不能绕过
+        # Hook 直接调用原始工具。
+        context = get_runtime_context()
+        arguments = self._arguments(tool_input)
+        invocation = self._build_invocation(
+            context,
+            spec,
+            arguments,
+            source_run_id,
+        )
+        # 确认尚未 Hook 化，先保持 R2 原有顺序：确认检查早于 Policy 判断。
+        self._check_confirmation(context, spec)
+        decision = await self._hook_chain.run_before_tool_call(
+            context,
+            invocation,
+            spec,
+        )
+        invocation.policy_decision = decision
+        self._raise_for_hook_decision(
+            context,
+            spec,
+            decision,
+            call_id=invocation.call_id,
+        )
+        # 前置 Hook 全部允许后才预留预算，确保 Policy DENY 不消耗调用次数。
+        self._budget_hook.reserve(context, spec)
+        try:
+            raw_output = await tool.ainvoke(
+                tool_input,
+                config={"callbacks": []},
+            )
+
+        # Runtime 使用统一 ToolResult 进入后置 Hook；Agent 仍接收原始业务输出，
+        # 避免 R2.5 结构重构改变现有工具和 Prompt 之间的返回协议。
+            normalized_result = self._result_normalizer.normalize(raw_output)
+            invocation.finished_at = datetime.now(timezone.utc)
+            invocation.result = normalized_result
+        # 更新 invocation 的 result 位置，便于后置 Hook 读取标准化结果。
+            invocation.result = await self._hook_chain.run_after_tool_call(
+                context,
+                invocation,
+                spec,
+                normalized_result,
+            )
+            return raw_output
+        except (RuntimeFatalError, ToolException):
+            # 已经具备 Runtime/Tool 协议的异常不能二次包装，保留原始错误类型。
+            raise
+        except Exception as exc:
+            # 受 Runtime 管理的工具出现未知异常时，只向上暴露稳定的 Runtime 错误协议。
+            raise RuntimeFatalError(
+                "RUNTIME_TOOL_EXECUTION_FAILED",
+                f"工具 {spec.name} 执行失败。",
+                details={
+                    "tool_name": spec.name,
+                    "exception_type": type(exc).__name__,
+                },
+                run_id=context.run_id,
+                call_id=invocation.call_id,
+            ) from exc
 
 
 class RuntimeManagedTool(BaseTool):
@@ -261,21 +309,34 @@ class RuntimeManagedTool(BaseTool):
         return list(args)
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
-        """同步入口：只调用 RuntimeEngine，不在 Wrapper 中复制业务实现。"""
+        """BaseTool 要求的同步扩展点；受治理工具只允许异步执行。"""
 
-        return self._runtime_engine.execute(
-            self._delegate,
-            self._runtime_spec,
-            self._tool_input(args, kwargs),
+        del args, kwargs
+        context = get_runtime_context(required=False)
+        raise RuntimeFatalError(
+            "RUNTIME_SYNC_EXECUTION_NOT_SUPPORTED",
+            f"Runtime 管理工具 {self.name} 只支持异步执行",
+            details={"tool_name": self.name},
+            run_id=context.run_id if context is not None else None,
         )
 
-    async def _arun(self, *args: Any, **kwargs: Any) -> Any:
-        """异步入口：与同步入口使用同一套 Runtime 检查。"""
+    async def _arun(
+        self,
+        *args: Any,
+        run_manager=None,
+        **kwargs: Any,
+    ) -> Any:
+        """异步入口：携带 LangChain run_id 进入 Runtime 生命周期。"""
 
         return await self._runtime_engine.aexecute(
             self._delegate,
             self._runtime_spec,
             self._tool_input(args, kwargs),
+            source_run_id=(
+                str(run_manager.run_id)
+                if run_manager is not None and run_manager.run_id is not None
+                else None
+            ),
         )
 
 

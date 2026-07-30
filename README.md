@@ -401,7 +401,6 @@ npm run preview
 | PATCH | `/api/sessions/{session_id}` | 重命名会话 |
 | DELETE | `/api/sessions/{session_id}` | 删除会话、消息、摘要和图表快照 |
 | POST | `/api/chat/stream` | SSE 流式 Agent 对话 |
-| POST | `/api/chat` | 非流式兼容接口 |
 | POST | `/api/chat/{session_id}/reply` | 回复 AskUser 问题 |
 | POST | `/api/attachments` | 上传并绑定对话附件 |
 | GET | `/api/files/{file_id}/download` | 鉴权下载 Agent 生成文件 |

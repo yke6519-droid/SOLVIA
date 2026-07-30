@@ -31,6 +31,7 @@ from datetime import datetime, timedelta
 from typing import Annotated, Optional
 from langchain_core.tools import tool, ToolException
 from dotenv import load_dotenv
+from backend.app.errors import ErrorCode, ToolError
 from backend.tools.date_parser_tool import parse_flexible_date
 
 # ============================================================
@@ -947,6 +948,29 @@ def format_prediction_summary(pred_df: pd.DataFrame, station_name: str,
 # Layer 2: 站点整合层 — predict_station_power（内部整合方法）
 # ============================================================
 
+def _require_station_coordinates(
+    station_name: str,
+    station_id: str | int,
+    lat: Optional[float],
+    lon: Optional[float],
+) -> None:
+    """在进入天气接口前校验站点坐标，避免 None 继续传给上游 API。"""
+
+    if lat is None or lon is None:
+        # 这是可由运维补录站点资料后恢复的业务错误，不应该继续执行天气请求。
+        raise ToolError(
+            ErrorCode.STATION_COORDINATES_MISSING,
+            f"站点“{station_name}”缺少经纬度，无法进行发电预测。",
+            details={
+                "station_id": str(station_id),
+                "station_name": station_name,
+                "latitude": lat,
+                "longitude": lon,
+            },
+            retryable=False,
+        )
+
+
 def predict_station_power(station_name: str, lat: float, lon: float,
                           station_id: str,
                           predict_date: Optional[str] = None,
@@ -986,6 +1010,8 @@ def predict_station_power(station_name: str, lat: float, lon: float,
         history_date = (
             datetime.strptime(predict_date, "%Y-%m-%d") - timedelta(days=1)
         ).strftime("%Y-%m-%d")
+
+    _require_station_coordinates(station_name, station_id, lat, lon)
 
     # 延迟导入 weather_fetcher 底层函数，避免循环依赖
     from backend.tools.weather_fetcher_tool import _fetch_from_archive, _fetch_from_forecast
@@ -1200,6 +1226,9 @@ def predict_power(
     lon = station_info["lon"]
     station_id = station_info["station_id"]
     full_name = station_info["name"]
+
+    # 预测入口再次校验，确保缺少坐标的站点不会先触发确认或天气 API 请求。
+    _require_station_coordinates(full_name, station_id, lat, lon)
 
 
     # 【步骤2】调用站点整合方法完成完整预测流程

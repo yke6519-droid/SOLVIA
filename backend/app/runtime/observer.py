@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Callable
 
 from langchain_core.tools import ToolException
 
+from backend.app.runtime.context import (
+    RuntimeInvocationBridge,
+    get_runtime_invocation_bridge,
+)
 from backend.app.runtime.enums import (
     AgentEventType,
     AgentRunState,
@@ -21,6 +24,7 @@ from backend.app.runtime.models import (
     ToolInvocation,
     ToolResult,
 )
+from backend.app.runtime.result_normalizer import ResultNormalizer
 
 
 logger = logging.getLogger(__name__)
@@ -106,71 +110,11 @@ def _summarize_arguments(value: Any) -> dict[str, Any]:
     return {"value": summary}
 
 
-def _to_mapping(value: Any) -> dict[str, Any] | None:
-    """尽量读取结构化工具结果，但不把原始文本直接写入事件。"""
-
-    if isinstance(value, dict):
-        return value
-    if hasattr(value, "content"):
-        value = value.content
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except (TypeError, json.JSONDecodeError):
-            return None
-        return parsed if isinstance(parsed, dict) else None
-    return None
-
-
 def _safe_text(value: Any) -> str | None:
     if value in (None, ""):
         return None
     text = str(value)
     return text if len(text) <= _MAX_TEXT_LENGTH else f"{text[:_MAX_TEXT_LENGTH]}..."
-
-
-def _extract_artifact_ids(value: Any) -> list[str]:
-    """从结构化结果提取制品 ID，不保存完整业务结果。"""
-
-    if isinstance(value, str) and value:
-        return [value]
-    if isinstance(value, list):
-        return [str(item) for item in value if item not in (None, "")][:20]
-    return []
-
-
-def _summarize_output(raw_output: Any) -> dict[str, Any]:
-    """生成工具结果的可审计摘要。"""
-
-    mapping = _to_mapping(raw_output)
-    if mapping is None:
-        return {
-            "type": "text",
-            "length": len(str(raw_output or "")),
-        }
-
-    summary: dict[str, Any] = {"type": "object"}
-    for key in (
-        "status",
-        "code",
-        "result_type",
-        "artifact_id",
-        "artifact_ids",
-        "file_id",
-        "chart_id",
-        "row_count",
-    ):
-        if key in mapping and mapping[key] not in (None, ""):
-            value = mapping[key]
-            summary[key] = _summarize_value(value, key=key)
-    error = mapping.get("error")
-    if isinstance(error, dict):
-        summary["error"] = {
-            key: _safe_text(error.get(key))
-            for key in ("code", "message")
-            if error.get(key) not in (None, "")
-        }
-    return summary
 
 
 def _failure_info(error: Any) -> tuple[str, str, str, dict[str, Any]]:
@@ -193,7 +137,13 @@ def _failure_info(error: Any) -> tuple[str, str, str, dict[str, Any]]:
 
     error_name = type(error).__name__ if error is not None else "ToolError"
     message = _safe_text(error) or "未知工具异常"
-    return "fatal", f"RUNTIME_{error_name.upper()}", message, {}
+    # 未知底层异常只保留类型，避免把底层解析/驱动信息发送给前端。
+    return (
+        "fatal",
+        "RUNTIME_TOOL_EXECUTION_FAILED",
+        "工具执行失败，请稍后重试。",
+        {"exception_type": error_name},
+    )
 
 
 class RuntimeObserver:
@@ -208,10 +158,18 @@ class RuntimeObserver:
         context: RuntimeContext,
         *,
         event_sink: EventSink | None = None,
+        result_normalizer: ResultNormalizer | None = None,
+        invocation_bridge: RuntimeInvocationBridge | None = None,
     ) -> None:
         self.context = context
         self.events: list[AgentEvent] = []
         self._event_sink = event_sink
+        self._result_normalizer = result_normalizer or ResultNormalizer()
+        self._invocation_bridge = (
+            invocation_bridge
+            or get_runtime_invocation_bridge(required=False)
+            or RuntimeInvocationBridge()
+        )
         self._pending_calls: dict[str, ToolInvocation] = {}
         self._finished = False
 
@@ -268,12 +226,21 @@ class RuntimeObserver:
         tool_name = str(raw_event.get("name") or "unknown_tool")
 
         if event_name == "on_tool_start":
-            invocation = ToolInvocation(
-                run_id=self.context.run_id,
-                tool_name=tool_name,
-                arguments=_summarize_arguments(data.get("input", {})),
-                started_at=_utc_now(),
-            )
+            argument_summary = _summarize_arguments(data.get("input", {}))
+            if source_run_id:
+                invocation = self._invocation_bridge.get_or_create(
+                    source_run_id,
+                    context=self.context,
+                    tool_name=tool_name,
+                    arguments=argument_summary,
+                )
+            else:
+                invocation = ToolInvocation(
+                    run_id=self.context.run_id,
+                    tool_name=tool_name,
+                    arguments=argument_summary,
+                    started_at=_utc_now(),
+                )
             self.context.call_count += 1
             if source_run_id:
                 self._pending_calls[source_run_id] = invocation
@@ -282,14 +249,21 @@ class RuntimeObserver:
                 call_id=invocation.call_id,
                 payload={
                     "tool_name": tool_name,
-                    "arguments": invocation.arguments,
+                    # 事件始终使用旁路摘要；Engine 后续可能把共享 Invocation
+                    # 中的 arguments 更新为供 Policy 使用的原始结构。
+                    "arguments": argument_summary,
                 },
             )
 
         if event_name == "on_tool_end":
             invocation = self._take_invocation(source_run_id, tool_name)
-            result = self._result_from_output(data.get("output"))
-            invocation.finished_at = _utc_now()
+            raw_output = data.get("output")
+            # RuntimeEngine 已完成治理时优先复用 after Hook 处理后的结果；
+            # 未接入 RuntimeManagedTool 的普通工具仍由 Observer 现场标准化。
+            result = invocation.result or self._result_normalizer.normalize(
+                raw_output
+            )
+            invocation.finished_at = invocation.finished_at or _utc_now()
             invocation.result = result
             return self._publish(
                 AgentEventType.TOOL_FINISHED,
@@ -297,7 +271,9 @@ class RuntimeObserver:
                 payload={
                     "tool_name": invocation.tool_name,
                     "result": result.model_dump(mode="json"),
-                    "output_summary": _summarize_output(data.get("output")),
+                    "output_summary": self._result_normalizer.summarize(
+                        raw_output
+                    ),
                 },
             )
 
@@ -337,7 +313,13 @@ class RuntimeObserver:
 
     def _take_invocation(self, source_run_id: str | None, tool_name: str) -> ToolInvocation:
         if source_run_id and source_run_id in self._pending_calls:
-            return self._pending_calls.pop(source_run_id)
+            invocation = self._pending_calls.pop(source_run_id)
+            self._invocation_bridge.pop(source_run_id)
+            return invocation
+        if source_run_id:
+            invocation = self._invocation_bridge.pop(source_run_id)
+            if invocation is not None:
+                return invocation
 
         # 极端情况下只收到结束事件，也要为真实观察到的调用补一个 call_id。
         self.context.call_count += 1
@@ -345,50 +327,6 @@ class RuntimeObserver:
             run_id=self.context.run_id,
             tool_name=tool_name,
             started_at=_utc_now(),
-        )
-
-    @staticmethod
-    def _result_from_output(raw_output: Any) -> ToolResult:
-        mapping = _to_mapping(raw_output)
-        status = ToolResultStatus.SUCCESS
-        code = None
-        message = None
-        retryable = False
-        suggested_actions: list[str] = []
-        artifact_ids: list[str] = []
-
-        if mapping:
-            raw_status = str(mapping.get("status", "")).lower()
-            if raw_status in {item.value for item in ToolResultStatus}:
-                status = ToolResultStatus(raw_status)
-            elif mapping.get("error"):
-                status = ToolResultStatus.RECOVERABLE_ERROR
-            code = _safe_text(mapping.get("code"))
-            message = _safe_text(mapping.get("message"))
-            retryable = bool(mapping.get("retryable", False))
-            # 图表工具等旧协议会把错误码放在 error 内部。Runtime 对外
-            # 统一提升到 ToolResult.code，避免 Policy/前端继续深挖 data。
-            nested_error = mapping.get("error")
-            if isinstance(nested_error, dict):
-                code = code or _safe_text(nested_error.get("code"))
-                message = message or _safe_text(nested_error.get("message"))
-                retryable = retryable or bool(nested_error.get("retryable", False))
-            suggested_actions = [
-                str(item) for item in mapping.get("suggested_actions", [])
-                if item not in (None, "")
-            ][:10]
-            artifact_ids = _extract_artifact_ids(mapping.get("artifact_ids"))
-            if mapping.get("artifact_id"):
-                artifact_ids.extend(_extract_artifact_ids(mapping.get("artifact_id")))
-
-        return ToolResult(
-            status=status,
-            code=code,
-            message=message,
-            retryable=retryable,
-            suggested_actions=suggested_actions,
-            artifact_ids=list(dict.fromkeys(artifact_ids)),
-            data=_summarize_output(raw_output),
         )
 
     def finish(
