@@ -7,9 +7,8 @@ SolarAgent 是一个面向光伏电站运营场景的智能分析 Agent。系统
 - `backend/`：FastAPI、LangChain Agent、业务工具、预测模型与 MySQL 持久化。
 - `frontend/`：Vue 3 + Vite 独立工作台。
 - `shared/`：前后端共享配置。
-- `docs/`：架构设计、功能复盘和性能优化记录。
 
-> 本 README 按 2026-07-24 当前源码整理。旧版 `chart_tool.py` 仍保留在仓库中，但已经不在 Agent 工具注册表中；正式图表链路以 `get_chart_capabilities → get_power_dataset → create_chart_plan` 为准。
+> 本 README 按 2026-08-03 当前源码整理。当前 Runtime 已完成 R1、R2、R2.5、R3 和 R4 的代码改造；R4-C 仍待真实前端导入验收。旧版 `chart_tool.py` 仍保留在仓库中，但已经不在 Agent 工具注册表中；正式图表链路以 `get_chart_capabilities → get_power_dataset → create_chart_plan` 为准。
 
 ## 一、技术栈
 
@@ -75,10 +74,11 @@ Agent 负责选择已注册能力和提交受限 `ChartPlan`，后端负责验�
 
 项目中有两类上传入口：
 
-1. **数据导入弹窗**：上传 `.xlsx` / `.xls`，先预览清洗结果，再由用户确认写入 MySQL。
+1. **数据导入弹窗**：上传 `.xlsx` / `.xls`，先预览清洗结果，使用 `preview_hash` 绑定确认内容，再以单文件事务写入 MySQL；重复记录由数据库唯一约束和 `INSERT IGNORE` 跳过。
 2. **对话附件**：在输入框通过加号上传 `.xlsx`、`.xls`、`.csv`、`.txt`、`.md`，得到不透明的 `attachment_id`，再由 Agent 选择现有读取、校验或导入工具。
 
 Agent 生成文件后，后端登记 `file_id` 并通过 SSE 返回安全元数据。前端展示文件卡片，用户点击卡片后由 Axios 携带 Bearer Token 下载 Blob。生成文件会绑定到助手消息，重新打开历史会话时文件卡片可以恢复。
+导入结果、文件结果、图表结果和站点结果均使用统一的 `status/code/message/data` 结果协议；`no_data` 表示业务上没有可写入数据，不等于系统故障。
 
 ```mermaid
 flowchart LR
@@ -128,6 +128,7 @@ Agent 输出文本中的服务器路径和 `/api/files/...` 下载链接会被�
 - 支持 `token`、`usage`、`tool_start`、`tool_end`、`chart_spec`、`user_input_required`、`error`、`done` 等事件。
 - Agent 文本按流式 token 增量展示，执行轨迹展示思考、工具调用、等待确认和完成状态。
 - 用户可以停止当前流式任务。
+- Runtime 对已接入的工具执行前进行状态、Policy、确认和输入边界检查；需要用户确认时通过 `WAITING_USER` 和 `AskUserBridge` 进入 SSE 交互。
 - 每轮助手回答下方展示输入、输出和总 Token 用量；历史消息重新加载后仍可恢复。
 
 #### 内容、图表与文件
@@ -169,7 +170,9 @@ Agent 输出文本中的服务器路径和 `/api/files/...` 下载链接会被�
 | 图表 | `get_chart_capabilities`、`get_power_dataset`、`create_chart_plan` |
 | 其他 | `search_knowledge_base`、`ask_user` |
 
-Prompt 要求 Agent 先在内部拆分目标、站点/地区、日期、数据来源和输出形式，再逐步调用工具。对于“查询全部已接入站点”这种明确事实请求，流式与非流式接口还会检查是否真实调用了 `list_all_stations`，避免模型直接幻想站点清单。
+Prompt 要求 Agent 先在内部拆分目标、站点/地区、日期、数据来源和输出形式，再逐步调用工具。对于“查询全部已接入站点”这种明确事实请求，流式接口还会检查是否真实调用了 `list_all_stations`，避免模型直接幻想站点清单。
+
+Runtime 对工具结果和异常使用统一边界：可修正的结构化业务错误最多交给 Agent 修正一次；不可重试业务错误由 Agent 总结后结束；Policy 拒绝、协议错误和未知异常直接中断并留下 Runtime 事件。
 
 #### 长期记忆
 
@@ -219,7 +222,10 @@ Prompt 要求 Agent 先在内部拆分目标、站点/地区、日期、数据�
 
 ### 3.6 数据导入、数据制品与文件产物
 
-- 发电量 Excel 导入支持预览、清洗、站点解析和批量入库。
+- 发电量 Excel 导入支持预览、清洗、站点解析和批量入库；执行前必须携带与预览内容匹配的 `preview_hash`。
+- Agent 对话导入接入 Runtime `ConfirmationHook`，确认内容绑定预览指纹；用户取消时不会执行原始导入工具。
+- 一个文件的多个 Sheet 使用同一数据库事务，任一 Sheet 失败则整体回滚。
+- 站点编码和站点时间记录使用数据库唯一约束，重复导入通过 `INSERT IGNORE` 保持幂等。
 - 对话附件使用 `attachment_id`，Agent 不接触服务器真实路径。
 - `read_table` 会遍历 Excel 的所有 Sheet 并生成工作簿摘要。
 - `export_table` 优先从 `artifact_id` 或会话 `active_dataset` 导出，可支持单站、多站、单序列和多序列数据。
@@ -236,6 +242,7 @@ Prompt 要求 Agent 先在内部拆分目标、站点/地区、日期、数据�
 - 同一会话同时只运行一个 Agent 任务，冲突返回 `SESSION_BUSY`。
 - 统一异常响应包含 `code`、`message`、`status`、`retryable`、`details` 和 `request_id`。
 - 前端按异常码区分认证失效、参数错误、会话冲突、数据不存在、图表限制、数据库故障和上游错误。
+- 工具层统一返回 `status`、`code`、`message`、`data`、`retryable`、`suggested_actions` 和 `artifact_ids`；旧的嵌套 `error` 协议会被标记为 `RUNTIME_RESULT_PROTOCOL_INVALID`。
 
 ## 四、系统架构
 
@@ -455,11 +462,15 @@ npm run build
 
 当前测试覆盖图表注册和限制、统一异常、Refresh Token、站点解析/地区范围、数据制品上下文、文件产物事件、表格导出和历史消息安全清洗。
 
-## 十一、当前限制与待完成
+最近一次完整验证：`pytest backend/tests -q` 通过 148 个测试，`unittest discover` 通过 136 个测试，后端语法检查和前端 `npm run build` 均通过；前端导入真实浏览器验收仍待完成。
 
-1. **用户与站点权限**：已有基础角色字段，但系统管理员、站点运维人员和可访问站点范围尚未形成完整 RBAC。
-2. **站点仪表盘**：当前核心入口仍是自然语言工作台，尚未提供传统筛选条件式原始数据仪表盘。
-3. **前端状态管理**：Pinia 已用于认证和会话基础状态；流式任务状态仍由页面级 composable 与 `App.vue` 协同管理，后续可继续收敛为更明确的任务状态模型。
+## 十一、当前状态与待完成
+
+当前阶段：R4-C 代码已完成，待真实前端导入验收。后续阶段为 R5 完成证据与数据制品解耦、R6 Runtime 持久化与恢复。
+
+1. **R4-C 真实验收**：代码已完成，仍需在真实前端验证预览、确认、取消、重复导入、文件变化和多 Sheet 回滚。
+2. **R5 完成证据与数据制品解耦**：尚未建立统一的完成证据登记和更高层图表数据解析入口。
+3. **R6 运行持久化与恢复**：Runtime 事件、运行状态、PendingInteraction 和业务 Checkpoint 尚未支持服务重启恢复。
 4. **前端模块拆分**：核心页面、对话组件和业务 composables 已完成拆分；`App.vue` 仍承担页面级编排，后续可继续拆为 workspace controller 或更细粒度 composables。
 5. **附件存储**：当前文件本体保存在本地 `FILE_DIR`；尚未迁移到阿里云 OSS 等对象存储。
 6. **Redis 缓存**：站点目录、会话列表和热点历史尚未接入 Redis；MySQL 是当前事实源。
@@ -470,20 +481,7 @@ npm run build
 11. **部署与可观测性**：尚未补齐 Docker、任务队列、指标监控、链路追踪、接口限流和集中日志。
 12. **旧代码收口**：`chart_tool.py` 与独立旧定时预测脚本仍保留在仓库中，但不属于当前 Agent 主链路。
 
-## 十二、相关文档
 
-- [统一数据制品链路](docs/数据制品统一链路与跨模块复用.md)
-- [图表能力架构](docs/图表能力.md)
-- [文件上传功能与泛化设计](docs/文件上传功能实现与泛化设计复盘.md)
-- [文件下载与 Blob 机制](docs/文件下载功能与Blob机制.md)
-- [流式对话与上下文记忆](docs/流式对话接口与上下文记忆机制.md)
-- [站点结构化解析与会话记忆](docs/站点结构化解析与会话级记忆复盘.md)
-- [性能优化记录](docs/性能优化记录.md)
-- [JWT 刷新令牌与活跃续期](docs/JWT刷新令牌与活跃续期.md)
-- [SSE 流式输出与会话锁](docs/SSE-流式输出-与-会话锁-设计亮点.md)
-- [Vite 开发与生产模式差异](docs/Vite开发模式与生产模式性能差异.md)
-- [项目全景评估与优化路线](docs/2026-07-16-项目全景评估与优化路线.md)
-
-## 十三、仓库地址
+## 十二、仓库地址
 
 GitHub：<https://github.com/yke6519-droid/SolarAgent>
