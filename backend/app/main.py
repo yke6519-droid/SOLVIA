@@ -28,22 +28,22 @@ logging.basicConfig(
 
 def _configure_proxy_environment() -> None:
     """避免本地服务和指定云服务错误经过系统代理。"""
-    proxy_env_keys = [
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "http_proxy",
-        "https_proxy",
-        "all_proxy",
-    ]
-    for key in proxy_env_keys:
-        os.environ.pop(key, None)
+    # ChatOpenAI/httpx 会从 HTTP(S)_PROXY 读取代理配置。
+    # 这里不能再全局删除代理变量，否则代理开启时外部模型请求会退回直连。
+    # 同时合并已有 NO_PROXY，避免覆盖用户或运行环境已经配置的域名。
+    no_proxy_items: list[str] = []
+    for key in ("NO_PROXY", "no_proxy"):
+        for value in os.environ.get(key, "").split(","):
+            value = value.strip()
+            if value and value not in no_proxy_items:
+                no_proxy_items.append(value)
 
-    no_proxy = (
-        "dashscope.aliyuncs.com,"
-        "bailian.cn-beijing.aliyuncs.com,"
-        "127.0.0.1,localhost"
-    )
+    # 本地前后端、数据库和回环地址不应经过 Clash/Mihomo。
+    for local_host in ("127.0.0.1", "localhost", "::1"):
+        if local_host not in no_proxy_items:
+            no_proxy_items.append(local_host)
+
+    no_proxy = ",".join(no_proxy_items)
     os.environ["NO_PROXY"] = no_proxy
     os.environ["no_proxy"] = no_proxy
 
