@@ -33,6 +33,7 @@ from backend.app.runtime import (
     build_tool_spec,
     wrap_tool,
 )
+from backend.app.runtime.tool_input import wrap_tool_input
 
 
 ALL_TOOLS = [
@@ -97,16 +98,18 @@ def get_all_tools(
         },
     )
 
-    return [
-        wrap_tool(
-            tool,
-            runtime_engine=runtime_engine,
-            runtime_spec=build_tool_spec(
+    prepared_tools = []
+    for tool in ALL_TOOLS:
+        if tool.name in RUNTIME_MANAGED_TOOL_NAMES:
+            tool = wrap_tool(
                 tool,
-                requires_confirmation=tool.name == "predict_power",
-            ),
-        )
-        if tool.name in RUNTIME_MANAGED_TOOL_NAMES
-        else tool
-        for tool in ALL_TOOLS
-    ]
+                runtime_engine=runtime_engine,
+                runtime_spec=build_tool_spec(
+                    tool,
+                    requires_confirmation=tool.name == "predict_power",
+                ),
+            )
+        else:
+            tool = wrap_tool_input(tool)
+        prepared_tools.append(tool)
+    return prepared_tools

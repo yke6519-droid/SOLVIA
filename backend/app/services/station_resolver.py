@@ -1,8 +1,8 @@
-"""Task-scoped station resolution with one-time ambiguity handling.
+"""任务级站点解析。
 
-All tools resolve user-facing station references through this module. A choice
-made for an ambiguous name is kept only for the active Agent turn, preventing
-duplicate prompts without silently carrying a choice into a later task.
+所有工具通过本模块解析用户提供的站点引用。遇到多个候选时只返回结构化
+歧义信息，由 Agent 调用 ask_user 获取自然语言回复，再用精确站点名称或
+ID 重新调用工具；本模块不直接等待用户，也不解析固定序号。
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from langchain_core.tools import ToolException
+from backend.app.errors import ToolError
 
 
 @dataclass
@@ -26,6 +26,8 @@ class StationResolutionContext:
     # The station explicitly selected through ask_user during this execution.
     # chat.py persists it only after the Agent task completes successfully.
     last_user_selected_station: dict[str, Any] | None = None
+    # Candidate IDs waiting for Agent/ask_user to resolve the ambiguity.
+    pending_selection_ids: set[str] = field(default_factory=set)
 
 
 _current_context: contextvars.ContextVar[StationResolutionContext | None] = contextvars.ContextVar(
@@ -98,20 +100,51 @@ class StationResolver:
             return None
 
         context = _current_context.get()
+        matches = self.find_candidates(reference, stations=stations)
+
+        if not matches:
+            return None
+
+        if len(matches) > 1:
+            # 业务解析层只报告歧义，不等待用户，也不解析“第几个”。
+            # Agent 会通过 ask_user 获取自然语言回复，再选择精确站点重试。
+            self.mark_selection_pending(matches)
+            raise ToolError(
+                "STATION_SELECTION_REQUIRED",
+                f"“{reference}”匹配到 {len(matches)} 个站点，需要用户选择。",
+                details=station_selection_payload(reference, matches),
+                retryable=True,
+            )
+
+        chosen = matches[0]
+
+        if context and str(chosen.get("station_id")) in context.pending_selection_ids:
+            context.last_user_selected_station = _copy_station(chosen)
+            context.pending_selection_ids.clear()
+
+        self._cache_resolution(context, reference, chosen)
+        return _copy_station(chosen)
+
+    def find_candidates(
+        self,
+        station_name: str,
+        *,
+        stations: dict[str, dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """只查找候选站点，不触发用户交互。"""
+
+        reference = str(station_name or "").strip()
+        if not reference:
+            return []
+
+        context = _current_context.get()
         cache_key = _reference_key(reference)
 
-        # A pronoun can reuse the explicitly confirmed station from the
-        # previous turn.  We never apply this fallback to an explicit region
-        # or station name, which must be resolved from the current request.
-        if (
-            context
-            and context.active_station
-            and _is_contextual_reference(reference)
-        ):
-            return _copy_station(context.active_station)
-
+        # 上一轮已经选定的站点和当前任务内的别名缓存优先复用。
+        if context and context.active_station and _is_contextual_reference(reference):
+            return [_copy_station(context.active_station)]
         if context and cache_key in context.resolved_by_alias:
-            return _copy_station(context.resolved_by_alias[cache_key])
+            return [_copy_station(context.resolved_by_alias[cache_key])]
 
         if stations is None:
             from backend.app.services.station_catalog_service import load_stations_from_db
@@ -120,20 +153,16 @@ class StationResolver:
 
         from backend.app.services.station_catalog_service import match_all_stations
 
-        matches = match_all_stations(reference, stations)
+        return [_copy_station(item) for item in match_all_stations(reference, stations)]
 
-        if not matches:
-            return None
+    def mark_selection_pending(self, matches: list[dict[str, Any]]) -> None:
+        """记录一次待用户选择的候选集合，供后续成功解析时保存上下文。"""
 
-        if len(matches) == 1:
-            chosen = matches[0]
-        else:
-            chosen = self._choose_ambiguous_station(reference, matches)
-            if context is not None:
-                context.last_user_selected_station = _copy_station(chosen)
-
-        self._cache_resolution(context, reference, chosen)
-        return _copy_station(chosen)
+        context = _current_context.get()
+        if context is not None:
+            context.pending_selection_ids = {
+                str(item.get("station_id")) for item in matches
+            }
 
     @staticmethod
     def _cache_resolution(
@@ -154,49 +183,29 @@ class StationResolver:
             if key:
                 context.resolved_by_alias[key] = snapshot
 
-    @staticmethod
-    def _choose_ambiguous_station(
-        reference: str,
-        matches: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        """Ask once for an explicit index and return the selected station."""
-        from backend.tools.ask_user_tool import request_user_input
-
-        options = [
-            f"  {index}. {info['name']} (ID:{info['station_id']}, "
-            f"位置:{info.get('location', '未知')})"
-            for index, info in enumerate(matches, 1)
-        ]
-        question = (
-            f"“{reference}”匹配到 {len(matches)} 个站点，请选择本次任务使用的站点：\n"
-            + "\n".join(options)
-            + f"\n请输入序号（1-{len(matches)}）"
-        )
-        print(f"⚠️ '{reference}' 匹配到 {len(matches)} 个站点，需要用户选择:")
-        for option in options:
-            print(option)
-
-        answer = str(request_user_input(question) or "").strip()
-        for prefix in ("用户回复:", "用户回复："):
-            if answer.startswith(prefix):
-                answer = answer[len(prefix):].strip()
-                break
-
-        try:
-            index = int(answer) - 1
-        except ValueError as exc:
-            raise ToolException("站点选择无效，请回复候选站点的序号后重新执行任务。") from exc
-
-        if not 0 <= index < len(matches):
-            raise ToolException(
-                f"站点选择超出范围，请回复 1 到 {len(matches)} 之间的序号后重新执行任务。"
-            )
-        chosen = matches[index]
-        print(f"✅ 用户选择了: {chosen['name']}")
-        return chosen
-
-
 station_resolver = StationResolver()
+
+
+def station_selection_payload(
+    reference: str,
+    matches: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """生成 Agent 可交给 ask_user 和后续 LLM 判断的候选站点数据。"""
+
+    return {
+        "reference": reference,
+        "candidate_count": len(matches),
+        "candidates": [
+            {
+                "index": index,
+                "station_id": item.get("station_id"),
+                "name": item.get("name"),
+                "capacity_kw": item.get("capacity_kw"),
+                "location": item.get("location", ""),
+            }
+            for index, item in enumerate(matches, 1)
+        ],
+    }
 
 
 def resolve_station(

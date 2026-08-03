@@ -13,7 +13,11 @@ from typing import Annotated
 from langchain_core.tools import ToolException, tool
 
 from backend.app.services.station_catalog_service import load_stations_from_db
-from backend.app.services.station_resolver import resolve_station
+from backend.app.services.station_resolver import (
+    resolve_station,
+    station_resolver,
+    station_selection_payload,
+)
 from backend.app.services.station_scope import (
     REGION_QUERY_MAX_STATIONS,
     station_scope_resolver,
@@ -29,6 +33,24 @@ def _format_station_list(stations: dict[str, dict]) -> str:
             f"容量:{station['capacity_kw']}kW, 位置:{station['location']})"
         )
     return "\n".join(lines)
+
+
+def _format_station_selection(
+    station_name: str,
+    candidates: list[dict],
+) -> str:
+    """把站点歧义交给 Agent，避免业务层自行等待和解析用户回复。"""
+
+    return json.dumps(
+        {
+            "status": "needs_user_input",
+            "code": "STATION_SELECTION_REQUIRED",
+            "message": f"“{station_name}”匹配到多个站点，请先向用户确认具体站点。",
+            "retryable": True,
+            "data": station_selection_payload(station_name, candidates),
+        },
+        ensure_ascii=False,
+    )
 
 
 @tool
@@ -48,6 +70,11 @@ def get_station_info(
     stations = load_stations_from_db()
     if not station_name.strip():
         return _format_station_list(stations)
+
+    candidates = station_resolver.find_candidates(station_name, stations=stations)
+    if len(candidates) > 1:
+        station_resolver.mark_selection_pending(candidates)
+        return _format_station_selection(station_name, candidates)
 
     info = resolve_station(station_name, stations=stations)
     if info is None:
@@ -69,6 +96,10 @@ def get_station_location(
 ) -> str:
     """查询站点位置、经纬度和装机容量。"""
     stations = load_stations_from_db()
+    candidates = station_resolver.find_candidates(station_name, stations=stations)
+    if len(candidates) > 1:
+        station_resolver.mark_selection_pending(candidates)
+        return _format_station_selection(station_name, candidates)
     info = resolve_station(station_name, stations=stations)
     if info is not None:
         print(

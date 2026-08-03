@@ -1,8 +1,8 @@
 """站点目录服务。
 
 这里集中负责 ``solar_station`` 表的读取、站点名称标准化和基础匹配。
-它不负责 LangChain 工具注册，也不负责向用户提问；交互式歧义处理由
-``station_resolver`` 负责，Agent 可调用的入口由 ``station_query_tool`` 提供。
+它不负责 LangChain 工具注册，也不负责向用户提问；歧义结果由站点解析器
+返回给 Agent，Agent 可调用的入口由 ``station_query_tool`` 提供。
 """
 
 from __future__ import annotations

@@ -30,6 +30,11 @@ from backend.app.runtime.hooks import (
 )
 from backend.app.runtime.interaction_service import RuntimeInteractionService
 from backend.app.runtime.result_normalizer import ResultNormalizer
+from backend.app.runtime.tool_input import (
+    build_tool_error_handler,
+    build_validation_error_handler,
+    normalize_tool_input,
+)
 
 
 def _schema_snapshot(args_schema: Any) -> dict[str, Any]:
@@ -289,8 +294,8 @@ class RuntimeManagedTool(BaseTool):
             callbacks=delegate.callbacks,
             tags=delegate.tags,
             metadata=delegate.metadata,
-            handle_tool_error=delegate.handle_tool_error,
-            handle_validation_error=delegate.handle_validation_error,
+            handle_tool_error=build_tool_error_handler(delegate.name),
+            handle_validation_error=build_validation_error_handler(delegate.name),
             response_format=delegate.response_format,
         )
         self._delegate = delegate
@@ -308,6 +313,12 @@ class RuntimeManagedTool(BaseTool):
         """返回当前 Wrapper 使用的 Runtime 工具描述。"""
 
         return self._runtime_spec
+
+    def _parse_input(self, tool_input: Any, tool_call_id: str | None) -> Any:
+        """Runtime 管理工具也复用同一套输入边界处理。"""
+
+        normalized = normalize_tool_input(self.args_schema, tool_input)
+        return super()._parse_input(normalized, tool_call_id)
 
     @staticmethod
     def _tool_input(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:

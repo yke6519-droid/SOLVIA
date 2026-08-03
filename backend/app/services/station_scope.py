@@ -89,7 +89,7 @@ class StationScopeResolver:
         *,
         stations: dict[str, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Resolve explicit names one by one, asking only for ambiguous items."""
+        """逐个解析明确名称；歧义项交给 Agent 通过 ask_user 处理。"""
         resolved: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
         for name in station_names:
