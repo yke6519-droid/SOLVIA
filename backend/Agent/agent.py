@@ -4,7 +4,7 @@ agent.py - AgentExecutor 组装
 构建 Agent 的核心入口,组装 LLM + Tools + Prompt + Memory。
 """
 
-from backend.Agent.llm import build_llm
+from backend.Agent.llm import build_intent_llm, build_llm
 from backend.Agent.tools import get_all_tools
 from backend.app.runtime import HybridUserIntentInterpreter, LLMIntentInterpreter
 from backend.tools.weather_fetcher_tool import get_current_datetime
@@ -31,8 +31,10 @@ def build_agent(
         AgentExecutor 实例
     """
     llm = build_llm()
-    # 复用 Agent 已有的 LLM；只有确定性规则无法判断用户回复时才调用它。
-    intent_interpreter = HybridUserIntentInterpreter(LLMIntentInterpreter(llm))
+    # 意图解释独立使用低温度模型，避免主 Agent 的工具调用与交互判断互相影响。
+    intent_interpreter = HybridUserIntentInterpreter(
+        LLMIntentInterpreter(build_intent_llm(), method="json_mode")
+    )
     tools = get_all_tools(intent_interpreter=intent_interpreter)
     # Agent 创建时固定注入一次服务端当前日期，避免模型自行猜测年份。
     current_datetime = get_current_datetime.invoke({})

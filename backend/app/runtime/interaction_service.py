@@ -74,6 +74,7 @@ class RuntimeInteractionService:
         question: str,
         timeout_seconds: float | None = None,
         allowed_intents: list[InteractionIntent] | None = None,
+        editable_fields: list[str] | None = None,
     ) -> InteractionResolution:
         """异步入口：将现有同步 Bridge 放到线程中，避免阻塞 SSE 事件循环。"""
 
@@ -85,6 +86,7 @@ class RuntimeInteractionService:
             question=question,
             timeout_seconds=timeout_seconds,
             allowed_intents=allowed_intents,
+            editable_fields=editable_fields,
         )
 
     def request_confirmation(
@@ -96,6 +98,7 @@ class RuntimeInteractionService:
         question: str,
         timeout_seconds: float | None = None,
         allowed_intents: list[InteractionIntent] | None = None,
+        editable_fields: list[str] | None = None,
     ) -> InteractionResolution:
         """发起一次确认，并将用户回复转换为稳定交互结果。"""
 
@@ -125,6 +128,7 @@ class RuntimeInteractionService:
                 allowed_intents
                 or [InteractionIntent.CONFIRM, InteractionIntent.CANCEL]
             ),
+            editable_fields=list(editable_fields or []),
         )
         context.pending_interaction = interaction
         self._state_machine.transition(

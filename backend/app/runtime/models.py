@@ -118,6 +118,8 @@ class PendingInteraction(RuntimeModel):
             InteractionIntent.CANCEL,
         ]
     )
+    # 只有明确列出的工具参数允许被用户意图修改，默认不允许修改任何参数。
+    editable_fields: list[str] = Field(default_factory=list)
     # 只保存业务指纹，不把站点名、日期等原始参数拼进 ID，避免泄露敏感输入。
     confirmation_key: str = Field(min_length=1)
     question: str = Field(min_length=1)
@@ -160,6 +162,14 @@ class ConfirmationRequest(RuntimeModel):
             InteractionIntent.CANCEL,
         ]
     )
+    # 交互层的最小参数修改白名单，避免 LLM 直接修改任意工具字段。
+    editable_fields: list[str] = Field(default_factory=list)
+
+
+class ArgumentPatch(RuntimeModel):
+    """一次经过 Runtime 校验的工具参数更新。"""
+
+    updates: dict[str, Any] = Field(default_factory=dict)
 
 
 class UserIntent(RuntimeModel):

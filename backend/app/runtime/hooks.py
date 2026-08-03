@@ -26,6 +26,7 @@ from backend.app.runtime.models import (
     ToolSpec,
 )
 from backend.app.runtime.interaction_service import RuntimeInteractionService
+from backend.app.runtime.intent_applier import IntentApplier
 
 
 class RuntimeHook(Protocol):
@@ -233,9 +234,11 @@ class ConfirmationHook(BaseRuntimeHook):
         interaction_service: RuntimeInteractionService,
         *,
         request_builders: dict[str, ConfirmationRequestBuilder] | None = None,
+        intent_applier: IntentApplier | None = None,
     ) -> None:
         self._interaction_service = interaction_service
         self._request_builders = dict(request_builders or {})
+        self._intent_applier = intent_applier or IntentApplier()
 
     async def before_tool_call(
         self,
@@ -272,8 +275,16 @@ class ConfirmationHook(BaseRuntimeHook):
             question=request.question,
             timeout_seconds=request.timeout_seconds,
             allowed_intents=request.allowed_intents,
+            editable_fields=request.editable_fields,
         )
         if resolution.state == InteractionState.CONFIRMED:
+            self._intent_applier.apply(
+                context,
+                invocation,
+                spec,
+                request,
+                resolution,
+            )
             return PolicyDecision(
                 action=PolicyAction.ALLOW,
                 reason="用户已确认工具调用",

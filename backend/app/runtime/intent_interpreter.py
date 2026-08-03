@@ -134,8 +134,11 @@ class DeterministicIntentInterpreter:
 class LLMIntentInterpreter:
     """使用已注入的 LLM 解释模糊回复，不在这里创建新的网络客户端。"""
 
-    def __init__(self, llm: Any) -> None:
+    def __init__(self, llm: Any, *, method: str = "json_mode") -> None:
+        if method not in {"function_calling", "json_mode", "json_schema"}:
+            raise ValueError(f"不支持的 LLM 结构化输出方式: {method}")
         self._llm = llm
+        self._method = method
 
     def interpret(
         self,
@@ -146,14 +149,21 @@ class LLMIntentInterpreter:
         prompt = (
             "你是 Runtime 人机交互意图分类器。\n"
             "只根据给定问题和用户回复，返回符合 UserIntent schema 的结构化结果。\n"
+            "只输出一个 JSON 对象，不要输出 Markdown 代码块、解释文字或工具调用。\n"
             "不要执行工具，不要替 Runtime 做最终放行决定。\n"
             f"交互问题：{interaction.question}\n"
             f"允许的意图：{', '.join(intent.value for intent in interaction.allowed_intents)}\n"
+            f"允许修改的参数字段：{', '.join(interaction.editable_fields) or '无'}\n"
             f"用户回复：{response}\n"
+            "如果意图是 modify、select 或 provide，slots 只能使用允许修改的字段，"
+            "并填写工具可以直接接收的最终参数值。\n"
             "如果无法确定，intent 返回 unclear，confidence 返回 0。"
         )
         try:
-            structured_llm = self._llm.with_structured_output(UserIntent)
+            structured_llm = self._llm.with_structured_output(
+                UserIntent,
+                method=self._method,
+            )
             value = structured_llm.invoke(prompt)
             if isinstance(value, UserIntent):
                 parsed = value
@@ -207,7 +217,16 @@ class HybridUserIntentInterpreter:
         raw_reply: str,
     ) -> UserIntent:
         fast_result = self._deterministic.interpret(interaction, raw_reply)
-        if fast_result.intent != InteractionIntent.UNCLEAR or self._llm is None:
+        # 确认/取消可以直接走关键词；参数修改类意图还需要 LLM 提取 slots。
+        needs_slot_extraction = fast_result.intent in {
+            InteractionIntent.MODIFY,
+            InteractionIntent.SELECT,
+            InteractionIntent.PROVIDE,
+        } and not fast_result.slots
+        if (
+            (fast_result.intent != InteractionIntent.UNCLEAR and not needs_slot_extraction)
+            or self._llm is None
+        ):
             return fast_result
         return self._llm.interpret(interaction, raw_reply)
 

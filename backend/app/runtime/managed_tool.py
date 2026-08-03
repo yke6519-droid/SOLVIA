@@ -228,8 +228,10 @@ class RuntimeEngine:
         # 前置 Hook 全部允许后才预留预算，确保 Policy DENY 不消耗调用次数。
         self._budget_hook.reserve(context, spec)
         try:
+            # Hook 可能已经通过 IntentApplier 更新 invocation.arguments；
+            # 这里必须使用更新后的参数，不能继续使用入口处的旧 tool_input。
             delegate_output = await tool.arun(
-                tool_input,
+                invocation.arguments,
                 tool_call_id=source_run_id,
                 config={"callbacks": []},
             )

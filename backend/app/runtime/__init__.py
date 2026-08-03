@@ -21,6 +21,7 @@ from backend.app.runtime.context import (
 )
 from backend.app.runtime.exceptions import RuntimeFatalError, RuntimeInteractionError
 from backend.app.runtime.models import (
+    ArgumentPatch,
     AgentEvent,
     ConfirmationRequest,
     InteractionResolution,
@@ -32,6 +33,7 @@ from backend.app.runtime.models import (
     ToolResult,
     ToolSpec,
 )
+from backend.app.runtime.intent_applier import IntentApplier
 from backend.app.runtime.interactions import make_confirmation_key
 from backend.app.runtime.interaction_service import (
     InteractionTransport,
@@ -69,6 +71,7 @@ __all__ = [
     "AgentEvent",
     "AgentEventType",
     "AgentRunState",
+    "ArgumentPatch",
     "BaseRuntimeHook",
     "BudgetHook",
     "ConfirmationHook",
@@ -86,6 +89,7 @@ __all__ = [
     "DeterministicIntentInterpreter",
     "HybridUserIntentInterpreter",
     "InteractionPolicy",
+    "IntentApplier",
     "LLMIntentInterpreter",
     "UserIntentInterpreter",
     "normalize_user_reply",

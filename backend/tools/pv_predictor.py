@@ -32,7 +32,11 @@ from typing import Annotated, Any, Optional
 from langchain_core.tools import tool, ToolException
 from dotenv import load_dotenv
 from backend.app.errors import ErrorCode, ToolError
-from backend.app.runtime import ConfirmationRequest, make_confirmation_key
+from backend.app.runtime import (
+    ConfirmationRequest,
+    InteractionIntent,
+    make_confirmation_key,
+)
 from backend.tools.date_parser_tool import parse_flexible_date
 
 # ============================================================
@@ -892,7 +896,8 @@ def compare_with_actual(pred_df: pd.DataFrame, station_id: str, predict_date: st
 
 def format_prediction_summary(pred_df: pd.DataFrame, station_name: str,
                               weather_type: str, comparison: str = "",
-                              weather_data_mode: str = "forecast") -> str:
+                              weather_data_mode: str = "forecast",
+                              predict_date: str | None = None) -> str:
     """
     将预测结果 DataFrame 转为 LLM 可读的文字摘要。
 
@@ -912,6 +917,8 @@ def format_prediction_summary(pred_df: pd.DataFrame, station_name: str,
         station_name: 站点名称
         weather_type: 天气类型
         comparison: compare_with_actual 返回的对比摘要（可选）
+        weather_data_mode: 数据模式
+        predict_date: 最终标准预测日期，供 Agent 组织回答时使用
 
     返回:
         str: LLM 可读的文字摘要
@@ -932,11 +939,16 @@ def format_prediction_summary(pred_df: pd.DataFrame, station_name: str,
     mode_label = "历史实况回测" if weather_data_mode == "historical_actual" else "未来预报"
     lines = [
         f" {station_name} 预测完成（{weather_type}）",
+    ]
+    # 日期必须来自本次最终执行参数，避免 Agent 沿用修改前的“明天/后天”。
+    if predict_date:
+        lines.append(f"预测日期: {predict_date}")
+    lines.extend([
         f"数据模式: {mode_label}",
         f"总发电量: {total_power:.1f} kWh",
         f"峰值时段: {peak_hour}:00，峰值: {peak_power:.1f} kWh",
         f"发电时段: {gen_start}:00~{gen_end}:00（{len(generating_hours)}小时）",
-    ]
+    ])
 
     if comparison:
         lines.append("")
@@ -1045,7 +1057,14 @@ def predict_station_power(station_name: str, lat: float, lon: float,
         # 仍然查一下实际值做对比(对比不入缓存，每次实时查)
         comparison = compare_with_actual(cached_pred, station_id, predict_date)
         weather_type = "缓存(未知)"
-        summary = format_prediction_summary(cached_pred, station_name, weather_type, comparison, prediction_mode)
+        summary = format_prediction_summary(
+            cached_pred,
+            station_name,
+            weather_type,
+            comparison,
+            prediction_mode,
+            predict_date,
+        )
         return summary, cached_pred, weather_type
 
     # 【确认门】只有缓存未命中、确实需要重新预测时才请求确认。
@@ -1123,7 +1142,14 @@ def predict_station_power(station_name: str, lat: float, lon: float,
 
     # 【步骤6】生成摘要
     print(f"\n 步骤6: 生成摘要...")
-    summary = format_prediction_summary(pred_df, station_name, weather_type, comparison, prediction_mode)
+    summary = format_prediction_summary(
+        pred_df,
+        station_name,
+        weather_type,
+        comparison,
+        prediction_mode,
+        predict_date,
+    )
 
     # 【步骤7】预测结果写入缓存(当天有效，当天结束后逻辑删除)
     print(f"\n 步骤7: 写入预测缓存...")
@@ -1232,11 +1258,18 @@ def build_prediction_confirmation_request(
         "请确认预测条件：\n"
         f"- 站点：{full_name}\n"
         f"- 日期：{predict_date}\n\n"
-        "回复“确认”或“确定”开始预测；回复“取消”终止本次预测。"
+        "回复“确认”开始预测；回复“取消”终止；也可以说“日期改成后天”修改日期。"
     )
     return ConfirmationRequest(
         confirmation_key=confirmation_key,
         question=question,
+        allowed_intents=[
+            InteractionIntent.CONFIRM,
+            InteractionIntent.CANCEL,
+            InteractionIntent.MODIFY,
+        ],
+        # 站点更换需要重新执行 Preflight，本轮先只开放日期修改。
+        editable_fields=["target_date"],
     )
 
 
