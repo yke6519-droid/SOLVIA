@@ -187,20 +187,26 @@ def write_file(
     if artifact and artifact.get("file_id"):
         return json.dumps(
             {
-                "status": "ready",
-                "result_type": "file",
+                "status": "success",
+                "code": None,
                 "message": "文件已生成，可以下载",
-                "file": artifact,
+                "data": {"result_type": "file", "file": artifact},
+                "retryable": False,
+                "suggested_actions": [],
+                "artifact_ids": [artifact["file_id"]],
             },
             ensure_ascii=False,
         )
     if artifact is not None:
         return json.dumps(
             {
-                "status": "generated_unregistered",
-                "result_type": "file",
+                "status": "recoverable_error",
+                "code": "FILE_ARTIFACT_REGISTRATION_FAILED",
                 "message": "文件已生成，但下载记录暂时不可用",
-                "file": None,
+                "data": {"result_type": "file", "file": None},
+                "retryable": False,
+                "suggested_actions": [],
+                "artifact_ids": [],
             },
             ensure_ascii=False,
         )

@@ -43,7 +43,7 @@ def _format_station_selection(
 
     return json.dumps(
         {
-            "status": "needs_user_input",
+            "status": "blocked",
             "code": "STATION_SELECTION_REQUIRED",
             "message": f"“{station_name}”匹配到多个站点，请先向用户确认具体站点。",
             "retryable": True,

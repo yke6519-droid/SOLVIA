@@ -316,8 +316,9 @@ def _process_agent_event(ev: dict):
         output_str = str(raw_output)
         if name == "create_chart_plan":
             result = _parse_structured_tool_output(raw_output)
-            if isinstance(result, dict) and result.get("status") == "accepted":
-                chart_spec = result.get("chart_spec")
+            result_data = result.get("data") if isinstance(result, dict) else None
+            if isinstance(result, dict) and result.get("status") == "success":
+                chart_spec = result_data.get("chart_spec") if isinstance(result_data, dict) else None
                 if isinstance(chart_spec, dict):
                     return "chart_spec", {
                         "name": name,
@@ -328,8 +329,9 @@ def _process_agent_event(ev: dict):
             return "tool_end", {
                 "name": name,
                 "result_type": "chart_error",
-                "code": result.get("error", {}).get("code") if isinstance(result, dict) else "CHART_PLAN_INVALID",
-                "error": result.get("error") if isinstance(result, dict) else None,
+                "code": result.get("code") if isinstance(result, dict) else "CHART_PLAN_INVALID",
+                "message": result.get("message") if isinstance(result, dict) else None,
+                "details": result_data if isinstance(result_data, dict) else None,
                 "result": output_str[:800] + ("..." if len(output_str) > 800 else ""),
             }
         if name in {"get_power_chart_data", "get_power_chart_data_by_range"}:
@@ -342,9 +344,10 @@ def _process_agent_event(ev: dict):
                     "chart_data": chart_data,
                 }
         result = _parse_structured_tool_output(raw_output)
-        if isinstance(result, dict) and result.get("result_type") == "file":
-            raw_file = result.get("file")
-            # SSE 只允许传递卡片所需字段，防止旧工具结果把路径或下载链接
+        result_data = result.get("data") if isinstance(result, dict) else None
+        if isinstance(result_data, dict) and result_data.get("result_type") == "file":
+            raw_file = result_data.get("file")
+            # SSE 只允许传递卡片所需字段，防止工具结果把路径或下载链接
             # 重新暴露给 Agent/前端。真正的下载地址由前端 file_id 组装并通过
             # Axios 请求，用户不能从 Agent 文本中点击服务器链接。
             safe_file = None

@@ -317,11 +317,12 @@ export async function renameSession(sessionId, title) {
   })
 }
 
-async function uploadPowerImport(path, file, skipClean = false) {
+async function uploadPowerImport(path, file, skipClean = false, previewHash = '') {
   await ensureFreshAccessToken()
   const formData = new FormData()
   formData.append('file', file, file.name)
   formData.append('skip_clean', String(Boolean(skipClean)))
+  if (previewHash) formData.append('preview_hash', previewHash)
 
   try {
     const { data } = await authClient.post(path, formData, {
@@ -337,11 +338,16 @@ async function uploadPowerImport(path, file, skipClean = false) {
 }
 
 export function previewPowerImport(file, options = {}) {
-  return uploadPowerImport('/import/power/preview', file, options.skipClean)
+  return uploadPowerImport('/import/power/preview', file, options.skipClean, '')
 }
 
 export function executePowerImport(file, options = {}) {
-  return uploadPowerImport('/import/power/execute', file, options.skipClean)
+  return uploadPowerImport(
+    '/import/power/execute',
+    file,
+    options.skipClean,
+    options.previewHash,
+  )
 }
 
 export async function uploadAttachment(sessionId, file) {

@@ -26,6 +26,7 @@ from backend.tools.date_parser_tool import parse_date
 from backend.tools.ask_user_tool import ask_user, request_user_input
 from backend.tools.chart_plan_tool import get_power_dataset, create_chart_plan, get_chart_capabilities
 from backend.tools.import_tool import import_power_data
+from backend.tools.import_tool import build_import_confirmation_request
 from backend.app.runtime import (
     RuntimeEngine,
     RuntimeInteractionService,
@@ -75,8 +76,12 @@ ALL_TOOLS = [
 ]
 
 
-# R3 将预测工具纳入 Runtime 管理，使 ConfirmationHook 能在真正执行前介入。
-RUNTIME_MANAGED_TOOL_NAMES = {"get_station_location", "predict_power"}
+# R3/R4-C 将需要前置确认的工具纳入 Runtime 管理。
+RUNTIME_MANAGED_TOOL_NAMES = {
+    "get_station_location",
+    "predict_power",
+    "import_power_data",
+}
 # 保留旧常量名，避免已有测试或外部注册代码导入时产生不必要的兼容问题。
 R2_MANAGED_TOOL_NAMES = RUNTIME_MANAGED_TOOL_NAMES
 
@@ -95,6 +100,7 @@ def get_all_tools(
         interaction_service=interaction_service,
         confirmation_request_builders={
             "predict_power": build_prediction_confirmation_request,
+            "import_power_data": build_import_confirmation_request,
         },
     )
 
@@ -106,7 +112,7 @@ def get_all_tools(
                 runtime_engine=runtime_engine,
                 runtime_spec=build_tool_spec(
                     tool,
-                    requires_confirmation=tool.name == "predict_power",
+                    requires_confirmation=tool.name in {"predict_power", "import_power_data"},
                 ),
             )
         else:

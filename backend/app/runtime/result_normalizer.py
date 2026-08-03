@@ -94,13 +94,6 @@ class ResultNormalizer:
             if key in mapping and mapping[key] not in (None, ""):
                 summary[key] = _summarize_value(mapping[key])
 
-        error = mapping.get("error")
-        if isinstance(error, dict):
-            summary["error"] = {
-                key: _safe_text(error.get(key))
-                for key in ("code", "message")
-                if error.get(key) not in (None, "")
-            }
         return summary
 
     def normalize(self, raw_output: Any) -> ToolResult:
@@ -119,23 +112,20 @@ class ResultNormalizer:
 
         if mapping:
             raw_status = str(mapping.get("status", "")).lower()
+            legacy_protocol = raw_status in {"rejected", "error"} or "error" in mapping
             if raw_status in {item.value for item in ToolResultStatus}:
                 status = ToolResultStatus(raw_status)
-            elif mapping.get("error"):
+            elif legacy_protocol:
+                # 不再读取旧 error 内容；只拒绝旧协议，避免它被默认当成成功。
                 status = ToolResultStatus.RECOVERABLE_ERROR
 
             code = _safe_text(mapping.get("code"))
             message = _safe_text(mapping.get("message"))
             retryable = bool(mapping.get("retryable", False))
-
-            # 兼容旧工具把错误码放在 error 对象中的返回协议。
-            nested_error = mapping.get("error")
-            if isinstance(nested_error, dict):
-                code = code or _safe_text(nested_error.get("code"))
-                message = message or _safe_text(nested_error.get("message"))
-                retryable = retryable or bool(
-                    nested_error.get("retryable", False)
-                )
+            if legacy_protocol:
+                code = "RUNTIME_RESULT_PROTOCOL_INVALID"
+                message = "工具返回结果不符合统一 Runtime 协议。"
+                retryable = False
 
             raw_actions = mapping.get("suggested_actions", [])
             if isinstance(raw_actions, list):

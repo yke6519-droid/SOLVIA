@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile
 from langchain_core.tools import ToolException
 
 from backend.app.dependencies.auth import get_current_user
-from backend.app.errors import AppError, ErrorCode
+from backend.app.errors import AppError, ErrorCode, ToolError
 from backend.tools.import_tool import execute_import, parse_excel_preview
 
 
@@ -87,9 +87,10 @@ async def preview_power_import(
 async def execute_power_import(
     file: UploadFile = File(...),
     skip_clean: bool = Form(False),
+    preview_hash: str = Form(...),
     current_user: dict = Depends(get_current_user),
 ):
-    """清洗并将前端确认后的发电量文件写入 MySQL。"""
+    """校验预览指纹后，将前端确认后的发电量文件写入 MySQL。"""
     del current_user
     filename, content = await _read_upload(file)
     try:
@@ -98,7 +99,18 @@ async def execute_power_import(
             file_bytes=content,
             filename=filename,
             skip_clean=skip_clean,
+            expected_preview_hash=preview_hash,
         )
+    except ToolError as exc:
+        # 保留 Runtime/Tool 层的稳定错误码，让前端知道是“预览失效”而非泛化入库失败。
+        status_code = 409 if exc.code == ErrorCode.IMPORT_PREVIEW_MISMATCH.value else 422
+        raise AppError(
+            exc.code,
+            str(exc),
+            status_code=status_code,
+            details=exc.details,
+            retryable=exc.retryable,
+        ) from exc
     except ToolException as exc:
         raise AppError(
             ErrorCode.IMPORT_EXECUTION_FAILED,

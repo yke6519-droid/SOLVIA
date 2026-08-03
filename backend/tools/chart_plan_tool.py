@@ -448,13 +448,13 @@ def create_chart_plan(
     if attempt > max_attempts:
         return json.dumps(
             {
-                "status": "rejected",
+                "status": "recoverable_error",
+                "code": "CHART_PLAN_ATTEMPTS_EXCEEDED",
+                "message": "本次请求的图表计划修正次数已用尽",
+                "data": {"attempt": attempt, "max_attempts": max_attempts},
                 "retryable": False,
-                "error": {
-                    "code": "CHART_PLAN_ATTEMPTS_EXCEEDED",
-                    "message": "本次请求的图表计划修正次数已用尽",
-                    "details": {"attempt": attempt, "max_attempts": max_attempts},
-                },
+                "suggested_actions": [],
+                "artifact_ids": [],
             },
             ensure_ascii=False,
         )
@@ -483,18 +483,31 @@ def create_chart_plan(
         error["details"]["max_attempts"] = max_attempts
         return json.dumps(
             {
-                "status": "rejected",
+                "status": "recoverable_error",
+                "code": error["code"],
+                "message": error["message"],
+                "data": {
+                    "capability_preflight": capability_preflight,
+                    "details": error["details"],
+                },
                 "retryable": error["retryable"],
-                "capability_preflight": capability_preflight,
-                "error": error,
+                "suggested_actions": [],
+                "artifact_ids": [],
             },
             ensure_ascii=False,
         )
     return json.dumps(
         {
-            "status": "accepted",
-            "capability_preflight": capability_preflight,
-            "chart_spec": chart_spec.model_dump(mode="json"),
+            "status": "success",
+            "code": None,
+            "message": "图表已生成",
+            "data": {
+                "capability_preflight": capability_preflight,
+                "chart_spec": chart_spec.model_dump(mode="json"),
+            },
+            "retryable": False,
+            "suggested_actions": [],
+            "artifact_ids": [],
         },
         ensure_ascii=False,
     )

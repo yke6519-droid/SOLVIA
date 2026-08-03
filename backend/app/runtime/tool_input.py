@@ -16,6 +16,10 @@ _validation_attempts: contextvars.ContextVar[dict[str, int] | None] = contextvar
     "runtime_tool_validation_attempts",
     default=None,
 )
+_tool_error_attempts: contextvars.ContextVar[dict[tuple[str, str], int] | None] = contextvars.ContextVar(
+    "runtime_tool_error_attempts",
+    default=None,
+)
 
 
 def _schema_accepts_array(schema: dict[str, Any]) -> bool:
@@ -88,11 +92,11 @@ def _validation_payload(tool_name: str, error: Exception, attempt: int) -> dict[
     """生成统一的 Agent-facing 参数错误协议。"""
 
     return {
-        "status": "error",
+        "status": "recoverable_error",
         "code": "TOOL_ARGUMENT_INVALID",
         "message": f"工具 {tool_name} 的参数格式不正确，请按照字段错误修正后重试一次。",
         "retryable": attempt < 2,
-        "details": {
+        "data": {
             "tool_name": tool_name,
             "attempt": attempt,
             "max_correction_attempts": 1,
@@ -117,7 +121,7 @@ def build_validation_error_handler(tool_name: str):
             raise ToolError(
                 "TOOL_ARGUMENT_INVALID",
                 payload["message"],
-                details=payload["details"],
+                details=payload["data"],
                 retryable=False,
             )
         return json.dumps(payload, ensure_ascii=False)
@@ -126,18 +130,47 @@ def build_validation_error_handler(tool_name: str):
 
 
 def build_tool_error_handler(tool_name: str):
-    """只把站点选择歧义交回 Agent，其他业务错误保持原有阻断行为。"""
+    """把业务 ToolError 转成 Agent 可理解的结构化工具结果。
+
+    RuntimeFatalError 不继承 ToolException，不会进入这里；因此 Policy、
+    确认状态机和未知系统异常仍然保持直接中断。
+    """
 
     def handle(error: Exception) -> str:
-        if getattr(error, "code", None) != "STATION_SELECTION_REQUIRED":
-            raise error
+        code = str(getattr(error, "code", None) or "TOOL_ERROR")
+        message = str(
+            getattr(error, "message", None)
+            or error
+            or f"工具 {tool_name} 执行失败。"
+        )
+        details = getattr(error, "details", {}) or {}
+        data = dict(details) if isinstance(details, dict) else {}
+        data.setdefault("tool_name", tool_name)
+        requested_retryable = bool(getattr(error, "retryable", False))
+        retryable = requested_retryable
+        if requested_retryable:
+            attempts = _tool_error_attempts.get()
+            if attempts is None:
+                attempts = {}
+                _tool_error_attempts.set(attempts)
+            attempt_key = (tool_name, code)
+            attempt = attempts.get(attempt_key, 0) + 1
+            attempts[attempt_key] = attempt
+            data.setdefault("attempt", attempt)
+            data.setdefault("max_correction_attempts", 1)
+            retryable = attempt <= 1
         payload = {
-            "status": "needs_user_input",
-            "code": "STATION_SELECTION_REQUIRED",
-            "message": getattr(error, "message", None)
-            or f"工具 {tool_name} 需要用户选择具体站点。",
-            "retryable": True,
-            "data": getattr(error, "details", {}) or {},
+            "status": (
+                "blocked"
+                if code == "STATION_SELECTION_REQUIRED"
+                else "recoverable_error"
+            ),
+            "code": code,
+            "message": message,
+            "retryable": retryable,
+            "data": data,
+            "suggested_actions": [],
+            "artifact_ids": [],
         }
         return json.dumps(payload, ensure_ascii=False)
 
@@ -148,6 +181,7 @@ def reset_tool_input_retry_state() -> None:
     """清理当前执行上下文的参数纠错次数，供测试和请求边界使用。"""
 
     _validation_attempts.set(None)
+    _tool_error_attempts.set(None)
 
 
 class ToolInputBoundary(BaseTool):

@@ -20,3 +20,13 @@ frontend/dist/
 backend/temp/file/
 backend/tests/__init__.py
 backend/tests/
+docs/代理问题排查与自救指南.md
+docs/Runtime_R1测试与实测验收记录.md
+docs/Runtime_R1源码复盘与后续路线图.md
+docs/Runtime架构改造交接文档.md
+docs/SOLVIA_项目最终方向与Runtime阶段设计交接文档_v1.0.md
+docs/最终目标与阶段性进展/SOLVIA_项目阶段进展与持续更新_v1.0.md
+docs/最终目标与阶段性进展/SOLVIA_项目最终目标与演进复盘_v1.0.md
+docs/最终目标与阶段性进展/SOLVIA_Runtime_R2.5_Hook化重构任务设计.md
+docs/最终目标与阶段性进展/SOLVIA_Runtime_R2源码复盘与工具调用链路分析.md
+HANDOFF.md

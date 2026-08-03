@@ -63,10 +63,19 @@ export function useImportWorkflow({ isStreaming, pendingQuestion, showToast, err
     importExecuting.value = true
     importError.value = ''
     try {
-      const result = await executePowerImport(importFile.value)
+      const result = await executePowerImport(importFile.value, {
+        previewHash: importPreview.value.preview_hash,
+      })
       importExecuting.value = false
       closeImportDialog()
-      showToast(`导入完成：新增 ${result.total_inserted || 0} 条，跳过 ${result.total_skipped || 0} 条`)
+      const data = result?.data || result || {}
+      if (result?.status === 'no_data') {
+        showToast(result.message || '文件清洗后没有可入库的数据')
+      } else {
+        showToast(
+          `导入完成：新增 ${data.total_inserted || 0} 条，跳过 ${data.total_skipped || 0} 条`,
+        )
+      }
     } catch (error) {
       importError.value = errorMessage(error, '数据入库失败，请稍后重试')
     } finally {

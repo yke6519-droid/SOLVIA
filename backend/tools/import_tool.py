@@ -4,13 +4,13 @@ import_tool.py - 数据导入入库工具 (LangChain Tool)
 读取 Excel 文件，自动解析站点信息和发电量数据，清洗后入库 MySQL。
 
 工具列表(@tool, 暴露给 LLM):
-  1. import_power_data  导入发电量数据到数据库(入库前 ask_user 确认)
+  1. import_power_data  导入发电量数据到数据库(由 Runtime 负责预览确认)
 
 公共函数(供前端 API 直接调用):
   - parse_excel_preview(file_path, file_bytes, filename, skip_clean)
       解析+清洗，返回 JSON 可序列化的预览(不入库)
-  - execute_import(file_path, file_bytes, filename, skip_clean)
-      读文件+清洗+入库，返回结果(不询问用户)
+  - execute_import(file_path, file_bytes, filename, skip_clean, expected_preview_hash)
+      读文件+清洗+入库，返回统一结果(不询问用户)
 
 设计说明:
   - 合并 import_station_data.py 和 import_multi_station.py 的逻辑为一个工具
@@ -35,6 +35,11 @@ from sqlalchemy import text
 from langchain_core.tools import tool, ToolException
 from dotenv import load_dotenv
 from backend.app.database import get_engine
+from backend.app.errors import ErrorCode, ToolError
+from backend.app.runtime.context import get_runtime_context
+from backend.app.runtime.enums import InteractionIntent, InteractionState
+from backend.app.runtime.interactions import make_confirmation_key
+from backend.app.runtime.models import ConfirmationRequest
 from backend.app.services.attachment_context import get_attachment_context
 from backend.app.services.attachment_service import resolve_attachment_path
 
@@ -187,6 +192,47 @@ def _read_excel_file(
     return results
 
 
+def _read_source_bytes(
+    file_path: Optional[str] = None,
+    file_bytes: Optional[bytes] = None,
+) -> bytes:
+    """读取用于生成预览指纹的原始文件内容。"""
+
+    if file_bytes is not None:
+        return file_bytes
+    if file_path is not None:
+        with open(file_path, "rb") as source:
+            return source.read()
+    raise ToolException("必须提供 file_path 或 file_bytes")
+
+
+def make_preview_hash(
+    *,
+    file_path: Optional[str] = None,
+    file_bytes: Optional[bytes] = None,
+    filename: str = "",
+    skip_clean: bool = False,
+) -> str:
+    """为预览生成稳定指纹，绑定原始文件、文件名和清洗选项。"""
+
+    source_bytes = _read_source_bytes(file_path=file_path, file_bytes=file_bytes)
+    display_name = filename or (os.path.basename(file_path) if file_path else "unknown")
+    metadata = json.dumps(
+        {
+            "filename": display_name,
+            "skip_clean": bool(skip_clean),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    digest = hashlib.sha256()
+    digest.update(source_bytes)
+    digest.update(b"\0")
+    digest.update(metadata)
+    return digest.hexdigest()
+
+
 def _clean_data(df: pd.DataFrame, skip_zero_filter: bool = False) -> Tuple[pd.DataFrame, dict]:
     """
     数据清洗，返回 (清洗后DataFrame, 清洗统计)。
@@ -251,56 +297,53 @@ def _clean_data(df: pd.DataFrame, skip_zero_filter: bool = False) -> Tuple[pd.Da
     return df, stats
 
 
-def _upsert_station(engine, station_info: dict) -> int:
+def _upsert_station(conn, station_info: dict) -> int:
     """
     插入或更新站点信息，返回 station_id。
     按 station_code 判断是否已存在(幂等)。
     """
-    with engine.connect() as conn:
-        result = conn.execute(
-            text("SELECT id FROM solar_station WHERE station_code = :code"),
-            {"code": station_info['station_code']}
-        ).fetchone()
+    result = conn.execute(
+        text("SELECT id FROM solar_station WHERE station_code = :code"),
+        {"code": station_info['station_code']}
+    ).fetchone()
 
-        if result:
-            station_id = result[0]
-            conn.execute(text("""
-                UPDATE solar_station
-                SET name = :name,
-                    capacity_kw = COALESCE(capacity_kw, :capacity),
-                    location = COALESCE(location, :location),
-                    province = COALESCE(province, :province),
-                    city = COALESCE(city, :city),
-                    updated_at = NOW()
-                WHERE id = :id
-            """), {
-                "name": station_info['name'],
-                "capacity": station_info['capacity_kw'],
-                "location": station_info['location'],
-                "province": station_info['province'],
-                "city": station_info['city'],
-                "id": station_id,
-            })
-            conn.commit()
-        else:
-            insert_result = conn.execute(text("""
-                INSERT INTO solar_station (station_code, name, capacity_kw, location, province, city)
-                VALUES (:code, :name, :capacity, :location, :province, :city)
-            """), {
-                "code": station_info['station_code'],
-                "name": station_info['name'],
-                "capacity": station_info['capacity_kw'],
-                "location": station_info['location'],
-                "province": station_info['province'],
-                "city": station_info['city'],
-            })
-            station_id = insert_result.lastrowid
-            conn.commit()
+    if result:
+        station_id = result[0]
+        conn.execute(text("""
+            UPDATE solar_station
+            SET name = :name,
+                capacity_kw = COALESCE(capacity_kw, :capacity),
+                location = COALESCE(location, :location),
+                province = COALESCE(province, :province),
+                city = COALESCE(city, :city),
+                updated_at = NOW()
+            WHERE id = :id
+        """), {
+            "name": station_info['name'],
+            "capacity": station_info['capacity_kw'],
+            "location": station_info['location'],
+            "province": station_info['province'],
+            "city": station_info['city'],
+            "id": station_id,
+        })
+    else:
+        insert_result = conn.execute(text("""
+            INSERT INTO solar_station (station_code, name, capacity_kw, location, province, city)
+            VALUES (:code, :name, :capacity, :location, :province, :city)
+        """), {
+            "code": station_info['station_code'],
+            "name": station_info['name'],
+            "capacity": station_info['capacity_kw'],
+            "location": station_info['location'],
+            "province": station_info['province'],
+            "city": station_info['city'],
+        })
+        station_id = insert_result.lastrowid
 
     return station_id
 
 
-def _batch_insert_generation(engine, station_id: int, df: pd.DataFrame) -> dict:
+def _batch_insert_generation(conn, station_id: int, df: pd.DataFrame) -> dict:
     """
     批量插入发电量数据。
     利用联合唯一索引做 INSERT IGNORE，自动跳过重复数据(幂等)。
@@ -319,15 +362,13 @@ def _batch_insert_generation(engine, station_id: int, df: pd.DataFrame) -> dict:
     total = len(records)
     inserted = 0
 
-    with engine.connect() as conn:
-        for batch_start in range(0, total, 1000):
-            batch = records[batch_start:batch_start + 1000]
-            result = conn.execute(text("""
-                INSERT IGNORE INTO power_generation (station_id, record_time, power_kwh)
-                VALUES (:station_id, :record_time, :power_kwh)
-            """), batch)
-            inserted += result.rowcount
-        conn.commit()
+    for batch_start in range(0, total, 1000):
+        batch = records[batch_start:batch_start + 1000]
+        result = conn.execute(text("""
+            INSERT IGNORE INTO power_generation (station_id, record_time, power_kwh)
+            VALUES (:station_id, :record_time, :power_kwh)
+        """), batch)
+        inserted += result.rowcount
 
     return {"total": total, "inserted": inserted, "skipped": total - inserted}
 
@@ -358,6 +399,121 @@ def _build_preview(filename: str, items: list) -> str:
     return "\n".join(lines)
 
 
+def _build_import_confirmation_question(preview: dict) -> str:
+    """把结构化预览转换成确认问题；用户回复由 Runtime 解释器处理。"""
+
+    lines = [
+        "📊 数据导入预览",
+        f"文件: {preview['filename']}",
+        f"检测到 {preview['station_count']} 个站点:",
+        "",
+    ]
+    for index, station in enumerate(preview["stations"], start=1):
+        capacity = (
+            f"{station['capacity_kw']:.0f} kW"
+            if station["capacity_kw"]
+            else "未知"
+        )
+        lines.append(f"{index}. {station['name']}")
+        lines.append(f"   装机容量: {capacity}")
+        if station["removed_days"] > 0:
+            lines.append(
+                f"   原始 {station['original_rows']} 行 → 清洗后 "
+                f"{station['cleaned_rows']} 行 "
+                f"(删除 {station['removed_days']} 天零值数据)"
+            )
+        else:
+            lines.append(
+                f"   原始 {station['original_rows']} 行 → "
+                f"清洗后 {station['cleaned_rows']} 行"
+            )
+        if station["time_range"]:
+            lines.append(
+                f"   时间范围: {station['time_range'][0]} ~ "
+                f"{station['time_range'][1]}"
+            )
+        lines.append("")
+    lines.extend(
+        [
+            "⚠️ 入库操作将写入 MySQL 数据库。",
+            "请确认是否导入这份预览对应的数据。你可以回复“可以导入”、"
+            "“先不要导入”或其他自然语言。",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _resolve_import_source(filename: str, attachment_id: str) -> tuple[str, str]:
+    """统一解析导入文件来源，确保预览和执行使用同一套权限边界。"""
+
+    if attachment_id:
+        # Agent 只能提交 attachment_id；真实路径由服务端按用户/会话权限解析。
+        attachment_context = get_attachment_context()
+        if attachment_context is None:
+            raise ToolException("当前没有可用的附件执行上下文")
+        allowed_ids = {
+            item.get("attachment_id") for item in attachment_context.attachments
+        }
+        if attachment_id not in allowed_ids:
+            raise ToolException("附件不属于当前任务或当前会话")
+        try:
+            attachment, resolved_path = resolve_attachment_path(
+                attachment_id,
+                user_id=attachment_context.user_id,
+                session_id=attachment_context.session_id,
+            )
+        except Exception as exc:
+            raise ToolException(str(exc)) from exc
+        return str(resolved_path), attachment["filename"]
+
+    if not FILE_DIR:
+        raise ToolException("FILE_DIR 未配置,请在 .env 中设置 FILE_DIR")
+
+    # 路径安全:防止 ../ 路径穿越。
+    full_path = os.path.normpath(os.path.join(FILE_DIR, filename))
+    if not full_path.startswith(os.path.normpath(FILE_DIR)):
+        raise ToolException("文件名包含非法路径")
+    if not os.path.exists(full_path):
+        raise ToolException(f"文件不存在: {filename}")
+
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise ToolException(
+            f"不支持的文件格式: {ext}。支持 {', '.join(ALLOWED_EXTENSIONS)}"
+        )
+    return full_path, filename
+
+
+def build_import_confirmation_request(
+    _context: object,
+    invocation: object,
+    _spec: object,
+) -> ConfirmationRequest:
+    """R4-C 预览阶段：只解析文件，不写数据库，生成 Runtime 确认请求。"""
+
+    arguments = (
+        invocation.arguments if isinstance(invocation.arguments, dict) else {}
+    )
+    filename = str(arguments.get("filename") or "")
+    attachment_id = str(arguments.get("attachment_id") or "")
+    skip_clean = bool(arguments.get("skip_clean", False))
+    full_path, resolved_filename = _resolve_import_source(filename, attachment_id)
+    preview = parse_excel_preview(
+        file_path=full_path,
+        filename=resolved_filename,
+        skip_clean=skip_clean,
+    )
+    confirmation_key = make_confirmation_key(
+        "import_power_data",
+        {"preview_hash": preview["preview_hash"]},
+    )
+    return ConfirmationRequest(
+        confirmation_key=confirmation_key,
+        question=_build_import_confirmation_question(preview),
+        allowed_intents=[InteractionIntent.CONFIRM, InteractionIntent.CANCEL],
+    )
+
+
 # ============================================================
 # 公共函数(供前端 API 直接调用)
 # ============================================================
@@ -386,6 +542,7 @@ def parse_excel_preview(
     返回:
       {
         "filename": "xxx.xlsx",
+        "preview_hash": "sha256...",
         "station_count": 2,
         "stations": [
           {
@@ -408,6 +565,12 @@ def parse_excel_preview(
         raise ToolException("文件中未检测到任何 Sheet")
 
     display_name = filename or (os.path.basename(file_path) if file_path else "unknown")
+    preview_hash = make_preview_hash(
+        file_path=file_path,
+        file_bytes=file_bytes,
+        filename=display_name,
+        skip_clean=skip_clean,
+    )
 
     stations = []
     for title, df_raw in sheets_data:
@@ -435,6 +598,7 @@ def parse_excel_preview(
 
     return {
         "filename": display_name,
+        "preview_hash": preview_hash,
         "station_count": len(stations),
         "stations": stations,
     }
@@ -445,6 +609,7 @@ def execute_import(
     file_bytes: Optional[bytes] = None,
     filename: str = "",
     skip_clean: bool = False,
+    expected_preview_hash: str | None = None,
 ) -> dict:
     """
     读文件 + 清洗 + 入库，返回结果(不询问用户)。
@@ -454,27 +619,36 @@ def execute_import(
 
     参数:
       同 parse_excel_preview
+      expected_preview_hash — 用户确认时拿到的预览指纹；缺失或不一致时拒绝入库
 
-    返回:
-      {
-        "success": True,
-        "filename": "xxx.xlsx",
-        "station_count": 2,
-        "total_inserted": 1348,
-        "total_skipped": 0,
-        "stations": [
-          {
-            "name": "宁波海曙英杰250KW光伏",
-            "station_id": 2,
-            "inserted": 648,
-            "skipped": 0
-          },
-          ...
-        ]
-      }
+    返回统一 Runtime 工具结果，入库明细位于 data 字段。
     """
     if not MYSQL_URL:
         raise ToolException("MYSQL_URL 未配置,请在 .env 中设置 MYSQL_URL")
+
+    if not expected_preview_hash:
+        raise ToolError(
+            ErrorCode.IMPORT_PREVIEW_REQUIRED,
+            "执行导入前必须先完成预览并确认，缺少 preview_hash。",
+            details={"action": "preview_then_confirm"},
+        )
+
+    # 执行前重新计算指纹，防止用户确认后文件被替换或清洗选项发生变化。
+    current_preview = parse_excel_preview(
+        file_path=file_path,
+        file_bytes=file_bytes,
+        filename=filename,
+        skip_clean=skip_clean,
+    )
+    if current_preview["preview_hash"] != expected_preview_hash:
+        raise ToolError(
+            ErrorCode.IMPORT_PREVIEW_MISMATCH,
+            "待导入文件或清洗选项已变化，请重新预览并确认。",
+            details={
+                "expected_preview_hash": expected_preview_hash,
+                "current_preview_hash": current_preview["preview_hash"],
+            },
+        )
 
     sheets_data = _read_excel_file(file_path, file_bytes, filename)
     if not sheets_data:
@@ -487,39 +661,57 @@ def execute_import(
     total_inserted = 0
     total_skipped = 0
 
-    for title, df_raw in sheets_data:
-        station_info = _parse_station_info(title)
-        df_clean, _ = _clean_data(df_raw, skip_zero_filter=skip_clean)
+    # 一个文件就是一个事务：任意 Sheet 失败时，站点和发电量全部回滚。
+    with engine.begin() as conn:
+        for title, df_raw in sheets_data:
+            station_info = _parse_station_info(title)
+            df_clean, _ = _clean_data(df_raw, skip_zero_filter=skip_clean)
 
-        if len(df_clean) == 0:
+            if len(df_clean) == 0:
+                stations_result.append({
+                    "name": station_info['name'],
+                    "station_id": None,
+                    "inserted": 0,
+                    "skipped": 0,
+                    "message": "清洗后无数据,跳过",
+                })
+                continue
+
+            station_id = _upsert_station(conn, station_info)
+            stats = _batch_insert_generation(conn, station_id, df_clean)
+
             stations_result.append({
                 "name": station_info['name'],
-                "station_id": None,
-                "inserted": 0,
-                "skipped": 0,
-                "message": "清洗后无数据,跳过",
+                "station_id": station_id,
+                "inserted": stats['inserted'],
+                "skipped": stats['skipped'],
             })
-            continue
+            total_inserted += stats['inserted']
+            total_skipped += stats['skipped']
 
-        station_id = _upsert_station(engine, station_info)
-        stats = _batch_insert_generation(engine, station_id, df_clean)
-
-        stations_result.append({
-            "name": station_info['name'],
-            "station_id": station_id,
-            "inserted": stats['inserted'],
-            "skipped": stats['skipped'],
-        })
-        total_inserted += stats['inserted']
-        total_skipped += stats['skipped']
-
+    has_data = any(
+        item.get("inserted", 0) + item.get("skipped", 0) > 0
+        for item in stations_result
+    )
+    status = "success" if has_data else "no_data"
+    code = None if has_data else ErrorCode.IMPORT_NO_DATA.value
+    message = "发电量数据导入完成" if has_data else "文件清洗后没有可入库的数据"
+    suggested_actions = [] if has_data else ["检查 Excel 的日期列和发电量列是否正确"]
     return {
-        "success": True,
-        "filename": display_name,
-        "station_count": len(stations_result),
-        "total_inserted": total_inserted,
-        "total_skipped": total_skipped,
-        "stations": stations_result,
+        "status": status,
+        "code": code,
+        "message": message,
+        "data": {
+            "result_type": "import",
+            "filename": display_name,
+            "station_count": len(stations_result),
+            "total_inserted": total_inserted,
+            "total_skipped": total_skipped,
+            "stations": stations_result,
+        },
+        "retryable": False,
+        "suggested_actions": suggested_actions,
+        "artifact_ids": [],
     }
 
 
@@ -537,89 +729,45 @@ def import_power_data(
 
     支持场景:用户要求导入、入库、上传发电量数据时调用。
     自动检测单Sheet/多Sheet格式，解析站点信息和发电量数据。
-    数据清洗后，入库前会调用 ask_user 让用户确认。
+    数据清洗后，由 Runtime ConfirmationHook 展示预览并等待用户确认。
     支持幂等导入:重复数据自动跳过。
 
     返回:
         导入结果摘要(站点数、新增条数、跳过条数)
     """
-    if attachment_id:
-        # Agent 只能提交 attachment_id；真实路径由服务端按用户/会话权限解析。
-        context = get_attachment_context()
-        if context is None:
-            raise ToolException("当前没有可用的附件执行上下文")
-        allowed_ids = {item.get("attachment_id") for item in context.attachments}
-        if attachment_id not in allowed_ids:
-            raise ToolException("附件不属于当前任务或当前会话")
-        try:
-            attachment, resolved_path = resolve_attachment_path(
-                attachment_id,
-                user_id=context.user_id,
-                session_id=context.session_id,
-            )
-        except Exception as exc:
-            raise ToolException(str(exc)) from exc
-        filename = attachment["filename"]
-        full_path = str(resolved_path)
-    else:
-        if not FILE_DIR:
-            raise ToolException("FILE_DIR 未配置,请在 .env 中设置 FILE_DIR")
+    full_path, filename = _resolve_import_source(filename, attachment_id)
 
-        # 路径安全:防止 ../ 路径穿越
-        full_path = os.path.normpath(os.path.join(FILE_DIR, filename))
-        if not full_path.startswith(os.path.normpath(FILE_DIR)):
-            raise ToolException("文件名包含非法路径")
-
-        if not os.path.exists(full_path):
-            raise ToolException(f"文件不存在: {filename}")
-
-        ext = os.path.splitext(filename)[1].lower()
-        if ext not in ALLOWED_EXTENSIONS:
-            raise ToolException(f"不支持的文件格式: {ext}。支持 {', '.join(ALLOWED_EXTENSIONS)}")
-
-    # 1. 解析预览(复用公共函数)
+    # 1. 解析预览；真正的用户确认由 Runtime ConfirmationHook 完成。
     preview = parse_excel_preview(file_path=full_path, filename=filename, skip_clean=skip_clean)
 
-    # 2. 入库前调用 ask_user 确认
-    from backend.tools.ask_user_tool import ask_user
-
-    # 构造发送给前端确认卡片的导入预览摘要
-    lines = [f"📊 数据导入预览", f"文件: {preview['filename']}", f"检测到 {preview['station_count']} 个站点:", ""]
-    for i, s in enumerate(preview['stations']):
-        cap_str = f"{s['capacity_kw']:.0f} kW" if s['capacity_kw'] else "未知"
-        lines.append(f"{i+1}. {s['name']}")
-        lines.append(f"   装机容量: {cap_str}")
-        if s['removed_days'] > 0:
-            lines.append(f"   原始 {s['original_rows']} 行 → 清洗后 {s['cleaned_rows']} 行 (删除 {s['removed_days']} 天零值数据)")
-        else:
-            lines.append(f"   原始 {s['original_rows']} 行 → 清洗后 {s['cleaned_rows']} 行")
-        if s['time_range']:
-            lines.append(f"   时间范围: {s['time_range'][0]} ~ {s['time_range'][1]}")
-        lines.append("")
-    lines.append("⚠️ 入库操作将写入 MySQL 数据库")
-    lines.append('确认导入？(回复"是"继续)')
-
-    confirmation = ask_user.invoke({"question": "\n".join(lines)})
-
-    # 检查用户是否确认
-    answer = confirmation.replace("用户回复:", "").strip().lower()
-    if answer not in ("是", "确认", "继续", "yes", "y", "好", "好的", "ok"):
-        return "❌ 用户已取消导入,未写入任何数据"
+    # 2. 只有当前 Runtime 运行中存在同一预览的已确认交互，才允许执行。
+    context = get_runtime_context(required=False)
+    confirmation_key = make_confirmation_key(
+        "import_power_data",
+        {"preview_hash": preview["preview_hash"]},
+    )
+    confirmed = bool(
+        context
+        and any(
+            item.confirmation_key == confirmation_key
+            and item.status == InteractionState.CONFIRMED
+            for item in context.interaction_history
+        )
+    )
+    if not confirmed:
+        raise ToolError(
+            ErrorCode.IMPORT_PREVIEW_REQUIRED,
+            "导入必须先经过 Runtime 预览确认。",
+            details={"preview_hash": preview["preview_hash"]},
+        )
 
     # 3. 执行入库(复用公共函数)
-    result = execute_import(file_path=full_path, filename=filename, skip_clean=skip_clean)
+    result = execute_import(
+        file_path=full_path,
+        filename=filename,
+        skip_clean=skip_clean,
+        expected_preview_hash=preview["preview_hash"],
+    )
 
-    # 4. 返回结构清晰的导入结果摘要
-    summary = [
-        f"✅ 导入完成:",
-        f"  文件: {result['filename']}",
-        f"  站点数: {result['station_count']}",
-    ]
-    for s in result['stations']:
-        if s.get('message'):
-            summary.append(f"  {s['name']}: {s['message']}")
-        else:
-            summary.append(f"  {s['name']} (ID={s['station_id']}): 新增 {s['inserted']} 条, 跳过重复 {s['skipped']} 条")
-    summary.append(f"  汇总: 新增 {result['total_inserted']} 条, 跳过 {result['total_skipped']} 条")
-
-    return "\n".join(summary)
+    # 4. 与文件、表格和图表工具一样，返回统一 JSON 结果协议。
+    return json.dumps(result, ensure_ascii=False)
