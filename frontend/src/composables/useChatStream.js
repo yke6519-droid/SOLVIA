@@ -120,11 +120,10 @@ export function useChatStream({
       const exists = message.files.some((file) => file.file_id === data.file.file_id)
       if (!exists) message.files.push(data.file)
     }
-    appendChart(message, data?.chart_data)
   }
 
   function handleChartSpec(message, data) {
-    const toolName = data?.name || 'create_chart_plan'
+    const toolName = data?.name || 'create_power_chart'
     const toolStep = [...(message.processSteps || [])].reverse().find(
       (step) => step.type === 'tool' && step.status === 'active' && step.label.includes(toolName),
     )

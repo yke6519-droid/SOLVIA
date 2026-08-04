@@ -24,7 +24,9 @@ from backend.tools.table_io_tool import export_table, read_table
 from backend.tools.knowledge_base_tool import search_knowledge_base
 from backend.tools.date_parser_tool import parse_date
 from backend.tools.ask_user_tool import ask_user, request_user_input
-from backend.tools.chart_plan_tool import get_power_dataset, create_chart_plan, get_chart_capabilities
+from backend.tools.chart_plan_tool import (
+    create_power_chart,
+)
 from backend.tools.import_tool import import_power_data
 from backend.tools.import_tool import build_import_confirmation_request
 from backend.app.runtime import (
@@ -68,9 +70,7 @@ ALL_TOOLS = [
     # 用户交互类
     ask_user,
     # 可视化数据类
-    get_chart_capabilities,
-    get_power_dataset,
-    create_chart_plan,
+    create_power_chart,
     # 数据导入类
     import_power_data,
 ]

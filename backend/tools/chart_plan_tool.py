@@ -6,15 +6,10 @@ from typing import Annotated
 from uuid import uuid4
 
 from langchain_core.tools import tool
-from pydantic import Field
-
-from backend.app.charting.context import (
-    capability_preflight_done,
-    consume_chart_plan_attempt,
-    mark_capability_preflight,
-)
 from backend.app.services.dataset_artifact_service import (
+    DatasetArtifactError,
     get_dataset_context,
+    load_dataset_artifact,
     save_dataset_artifact,
 )
 from backend.app.charting.datasets import (
@@ -23,9 +18,17 @@ from backend.app.charting.datasets import (
     load_power_source_range,
     normalize_source_types,
 )
+from backend.app.charting.data_resolver import resolve_chart_data
 from backend.app.charting.errors import ChartValidationError
 from backend.app.charting.registry import get_capability, get_enabled_capabilities
-from backend.app.charting.schemas import ChartPlan, FieldDefinition, SeriesBinding
+from backend.app.charting.schemas import (
+    ChartDataView,
+    ChartPlan,
+    ChartRequest,
+    DatasetArtifact,
+    FieldDefinition,
+    SeriesBinding,
+)
 from backend.app.charting.service import chart_service
 from backend.app.errors import ToolError
 
@@ -34,21 +37,11 @@ SOURCE_LABELS = {"actual": "实际发电量", "predicted": "预测发电量"}
 
 
 def _ensure_capability_preflight() -> dict:
-    """Ensure the current chart flow has inspected the capability registry.
-
-    Prompt ordering is only a hint. If the Agent skips the public
-    ``get_chart_capabilities`` tool, the deterministic tool layer repairs the
-    missing transition instead of exposing an orchestration error to the user.
-    """
-
-    if capability_preflight_done():
-        return {"status": "ready", "mode": "agent_preflight"}
-
+    """确保当前图表流程已经读取能力注册表。"""
     capabilities = get_enabled_capabilities()
-    mark_capability_preflight()
     return {
         "status": "ready",
-        "mode": "auto_preflight",
+        "mode": "internal_preflight",
         "capability_count": len(capabilities),
     }
 
@@ -244,8 +237,7 @@ def _validate_range_shape(
     }
 
 
-@tool
-def get_power_dataset(
+def _build_power_dataset(
     target_date: Annotated[str | None, "单日日期；范围汇总时改用 start_date 和 end_date"] = None,
     station_name: Annotated[str | None, "单个站点名称，例如‘英杰’；多站点时可改用 station_names"] = None,
     station_names: Annotated[list[str] | None, "多个站点名称，例如['英杰','哲丰一车间']"] = None,
@@ -255,7 +247,6 @@ def get_power_dataset(
     granularity: Annotated[str, "数据粒度：hourly逐小时，daily_total日总量"] = "hourly",
 ) -> str:
     """获取并标准化发电数据制品，不选择图表模板。"""
-    from backend.app.charting.schemas import DatasetArtifact
     from backend.tools.date_parser_tool import parse_flexible_date
     from backend.tools.power_query_tool import _resolve_station_id
 
@@ -326,8 +317,7 @@ def get_power_dataset(
                     axis_field: axis_value,
                     "station": station_info["name"],
                     "source_type": source_type,
-                    # The semantic series key is source for one station and
-                    # station for a multi-station query.
+                    # 单站点按数据来源分组，多站点按站点分组。
                     "series_key": source_type if len(targets) == 1 else station_info["name"],
                     "value_kwh": float(value["value_kwh"]),
                 })
@@ -382,7 +372,7 @@ def get_power_dataset(
                 **source_labels,
                 **({item["name"]: item["name"] for item in station_infos} if len(targets) > 1 else {}),
             },
-            "source_tool": "get_power_dataset",
+            "source_tool": "create_power_chart",
         },
     )
     save_dataset_artifact(artifact)
@@ -418,69 +408,107 @@ def get_power_dataset(
         ensure_ascii=False,
     )
 
+def _build_chart_plan_from_view(
+    request: ChartRequest,
+    view: ChartDataView,
+    artifact: DatasetArtifact,
+) -> ChartPlan:
+    """把图表数据视图转换成内部 ChartPlan，不再让 Agent 填写字段绑定。"""
 
-class CreateChartPlanArgs(ChartPlan):
-    """Stable tool schema; capability-specific rules remain in the registry."""
+    is_daily = request.granularity == "daily_total"
+    if is_daily:
+        capability_id = "period_aggregate"
+        chart_type = "bar"
+        template_id = "aggregate_bar"
+    elif view.series_field:
+        capability_id = "time_series_compare"
+        chart_type = "line"
+        template_id = "multi_line"
+    else:
+        capability_id = "time_series_trend"
+        chart_type = "line"
+        template_id = "single_line"
 
-    series: list[SeriesBinding] = Field(default_factory=list)
+    series = []
+    if view.series_field is None:
+        series = [
+            SeriesBinding(
+                field=view.value_field,
+                name=artifact.field_schema[view.value_field].label,
+            )
+        ]
 
-
-@tool(args_schema=CreateChartPlanArgs)
-def create_chart_plan(
-    capability_id: str,
-    artifact_id: str,
-    chart_type: str | None = None,
-    template_id: str | None = None,
-    x_field: str | None = None,
-    x_role: str | None = None,
-    series_mode: str | None = None,
-    series: list[dict] | None = None,
-    group_field: str | None = None,
-    value_field: str | None = None,
-    view: str | None = None,
-    title: str | None = None,
-    schema_version: str = "1.0",
-) -> str:
-    """提交受限 ChartPlan，成功后返回后端生成的 ChartSpec。"""
-    capability_preflight = _ensure_capability_preflight()
-
-    attempt, max_attempts = consume_chart_plan_attempt()
-    if attempt > max_attempts:
-        return json.dumps(
-            {
-                "status": "recoverable_error",
-                "code": "CHART_PLAN_ATTEMPTS_EXCEEDED",
-                "message": "本次请求的图表计划修正次数已用尽",
-                "data": {"attempt": attempt, "max_attempts": max_attempts},
-                "retryable": False,
-                "suggested_actions": [],
-                "artifact_ids": [],
-            },
-            ensure_ascii=False,
-        )
-
-    plan = ChartPlan(
-        schema_version=schema_version,
+    return ChartPlan(
         capability_id=capability_id,
         chart_type=chart_type,
         template_id=template_id,
-        artifact_id=artifact_id,
-        x_field=x_field,
-        x_role=x_role,
-        series_mode=series_mode,
-        series=series or [],
-        group_field=group_field,
-        value_field=value_field,
-        view=view,
+        artifact_id=view.artifact_id,
+        x_field=view.x_field,
+        x_role=view.x_role,
+        series_mode="group" if view.series_field else "single",
+        series=series,
+        group_field=view.series_field,
+        value_field=view.value_field if view.series_field else None,
+        view="date_trend" if is_daily else None,
+        title=request.title,
+    )
+
+
+@tool
+def create_power_chart(
+    target_date: Annotated[str | None, "单日日期；范围汇总时改用 start_date 和 end_date"] = None,
+    station_name: Annotated[str | None, "单个站点名称"] = None,
+    station_names: Annotated[list[str] | None, "多个站点名称"] = None,
+    source_types: Annotated[list[str] | None, "数据来源：actual 实际或 predicted 预测"] = None,
+    start_date: Annotated[str | None, "周期汇总起始日期"] = None,
+    end_date: Annotated[str | None, "周期汇总结束日期"] = None,
+    granularity: Annotated[str, "数据粒度：hourly 小时或 daily_total 日汇总"] = "hourly",
+    title: Annotated[str | None, "可选图表标题"] = None,
+) -> str:
+    """根据高层需求生成图表，字段绑定和图表模板由后端自动决定。"""
+
+    targets = _station_targets(station_name, station_names)
+    try:
+        requested_sources = normalize_source_types(source_types)
+    except DatasetSourceError as exc:
+        raise ToolError("DATA_SOURCE_UNSUPPORTED", str(exc)) from exc
+
+    request = ChartRequest(
+        station_names=targets,
+        target_date=target_date,
+        start_date=start_date,
+        end_date=end_date,
+        source_types=requested_sources,
+        granularity=granularity,
         title=title,
     )
+    capability_preflight = _ensure_capability_preflight()
+
+    # 这里是工具内部复用，不再通过 LangChain Tool.invoke 制造一层嵌套工具事件。
+    dataset_result = _build_power_dataset(
+        target_date=target_date,
+        station_names=targets,
+        source_types=requested_sources,
+        start_date=start_date,
+        end_date=end_date,
+        granularity=granularity,
+    )
+    dataset_payload = json.loads(dataset_result)
+    if dataset_payload.get("status") != "created":
+        return dataset_result
+
+    artifact_id = dataset_payload["artifact_id"]
     try:
+        artifact = load_dataset_artifact(artifact_id)
+        data_view = resolve_chart_data(request, artifact)
+        plan = _build_chart_plan_from_view(request, data_view, artifact)
         chart_spec = chart_service.create_chart(plan)
-    except ChartValidationError as exc:
-        error = exc.to_dict()
-        error["retryable"] = attempt < max_attempts
-        error.setdefault("details", {})["attempt"] = attempt
-        error["details"]["max_attempts"] = max_attempts
+    except (ChartValidationError, DatasetArtifactError) as exc:
+        error = exc.to_dict() if isinstance(exc, ChartValidationError) else {
+            "code": exc.code,
+            "message": exc.message,
+            "details": {},
+        }
         return json.dumps(
             {
                 "status": "recoverable_error",
@@ -488,14 +516,15 @@ def create_chart_plan(
                 "message": error["message"],
                 "data": {
                     "capability_preflight": capability_preflight,
-                    "details": error["details"],
+                    "details": error.get("details", {}),
                 },
-                "retryable": error["retryable"],
+                "retryable": False,
                 "suggested_actions": [],
-                "artifact_ids": [],
+                "artifact_ids": [artifact_id],
             },
             ensure_ascii=False,
         )
+
     return json.dumps(
         {
             "status": "success",
@@ -507,20 +536,7 @@ def create_chart_plan(
             },
             "retryable": False,
             "suggested_actions": [],
-            "artifact_ids": [],
-        },
-        ensure_ascii=False,
-    )
-
-
-@tool
-def get_chart_capabilities() -> str:
-    """返回当前运行时已启用的图表能力和限制。"""
-    mark_capability_preflight()
-    return json.dumps(
-        {
-            "capabilities": get_enabled_capabilities(),
-            "selection_rule": "先根据数据粒度、序列数量和字段角色选择已注册能力，再获取数据制品并提交 ChartPlan",
+            "artifact_ids": [artifact_id],
         },
         ensure_ascii=False,
     )

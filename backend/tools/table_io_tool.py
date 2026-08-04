@@ -455,7 +455,7 @@ def _frame_summary_dict(frame: pd.DataFrame) -> dict:
 
 @tool
 def export_table(
-    artifact_id: Annotated[str, "数据制品 ID。优先使用 get_power_dataset 返回的 artifact_id，可导出多站点、多序列和其他标准化表格"] = "",
+    artifact_id: Annotated[str, "数据制品 ID。优先使用图表或数据工具返回的 artifact_id，可导出多站点、多序列和其他标准化表格"] = "",
     station_name: Annotated[str, "兼容旧查询的站点名称,如 '英杰'。使用 artifact_id 时不需要传"] = "",
     target_date: Annotated[str, "兼容旧查询的日期。使用 artifact_id 时不需要传"] = "",
     data_type: Annotated[str, "兼容旧查询的数据类型。使用 artifact_id 时不需要传"] = "",
@@ -466,7 +466,7 @@ def export_table(
     """导出标准化数据制品或兼容旧查询结果为 Excel/CSV。
 
     首选调用方式:
-        先通过 get_power_dataset 获取 artifact_id，再传 artifact_id 导出。
+        先通过图表或数据工具获取 artifact_id，再传 artifact_id 导出。
         这种方式不绑定单站点或固定 data_type，支持多站点、多序列、
         实际/预测数据制品以及未来注册的其他标准化表格。
 

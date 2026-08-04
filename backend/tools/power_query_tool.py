@@ -31,8 +31,12 @@ from dotenv import load_dotenv
 import os
 load_dotenv()
 
-from backend.tools.cache_manager import get_prediction_data_mode
 from backend.app.database import get_engine
+from backend.app.services.power_data_service import (
+    query_actual_power,
+    query_actual_power_range,
+    query_predicted_power,
+)
 from backend.app.services.station_catalog_service import (
     load_stations_from_db,
     query_stations_by_region,
@@ -80,17 +84,7 @@ def _query_actual_power(station_id: str, predict_date: str) -> pd.DataFrame:
     返回:
         DataFrame(record_time, power_kwh),无数据则返回空 DataFrame
     """
-    engine = get_engine()
-    query = text("""
-        SELECT record_time, power_kwh
-        FROM power_generation
-        WHERE station_id = :sid
-          AND DATE(record_time) = :dt
-        ORDER BY record_time
-    """)
-    with engine.connect() as conn:
-        df = pd.read_sql(query, conn, params={"sid": station_id, "dt": predict_date})
-    return df
+    return query_actual_power(station_id, predict_date)
 
 
 def _query_actual_power_range(station_id: str, start_date: str, end_date: str) -> pd.DataFrame:
@@ -108,17 +102,7 @@ def _query_actual_power_range(station_id: str, start_date: str, end_date: str) -
     返回:
         DataFrame(record_time, power_kwh),无数据则返回空 DataFrame
     """
-    engine = get_engine()
-    query = text("""
-        SELECT record_time, power_kwh
-        FROM power_generation
-        WHERE station_id = :sid
-          AND DATE(record_time) BETWEEN :start AND :end
-        ORDER BY record_time
-    """)
-    with engine.connect() as conn:
-        df = pd.read_sql(query, conn, params={"sid": station_id, "start": start_date, "end": end_date})
-    return df
+    return query_actual_power_range(station_id, start_date, end_date)
 
 
 # ============================================================
@@ -296,13 +280,10 @@ def get_predicted_power(
         预测发电量的文字摘要(总发电量、峰值时段、天气类型)
     """
     from backend.tools.date_parser_tool import parse_flexible_date
-    from backend.tools.cache_manager import read_prediction_cache
     predict_date = parse_flexible_date(target_date)
     station_id, info = _resolve_station_id(station_name)
 
-    df = read_prediction_cache(
-        station_id, predict_date, get_prediction_data_mode(predict_date)
-    )
+    df = query_predicted_power(station_id, predict_date)
     if df is None:
         return (
             f"⏳ {info['name']} 在 {predict_date} 暂无预测缓存记录。\n"
@@ -440,14 +421,11 @@ def get_power_comparison(
         对比摘要(预测总量、实际总量、偏差、偏差率、逐时对比)
     """
     from backend.tools.date_parser_tool import parse_flexible_date
-    from backend.tools.cache_manager import read_prediction_cache
     predict_date = parse_flexible_date(target_date)
     station_id, info = _resolve_station_id(station_name)
 
     # 查预测缓存
-    pred_df = read_prediction_cache(
-        station_id, predict_date, get_prediction_data_mode(predict_date)
-    )
+    pred_df = query_predicted_power(station_id, predict_date)
     if pred_df is None:
         return (
             f"⏳ {info['name']} 在 {predict_date} 暂无预测记录。\n"

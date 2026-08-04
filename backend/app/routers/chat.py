@@ -314,7 +314,7 @@ def _process_agent_event(ev: dict):
     if event == "on_tool_end":
         raw_output = ev.get("data", {}).get("output", "")
         output_str = str(raw_output)
-        if name == "create_chart_plan":
+        if name == "create_power_chart":
             result = _parse_structured_tool_output(raw_output)
             result_data = result.get("data") if isinstance(result, dict) else None
             if isinstance(result, dict) and result.get("status") == "success":
@@ -329,20 +329,11 @@ def _process_agent_event(ev: dict):
             return "tool_end", {
                 "name": name,
                 "result_type": "chart_error",
-                "code": result.get("code") if isinstance(result, dict) else "CHART_PLAN_INVALID",
+                "code": result.get("code") if isinstance(result, dict) else "CHART_TOOL_INVALID",
                 "message": result.get("message") if isinstance(result, dict) else None,
                 "details": result_data if isinstance(result_data, dict) else None,
                 "result": output_str[:800] + ("..." if len(output_str) > 800 else ""),
             }
-        if name in {"get_power_chart_data", "get_power_chart_data_by_range"}:
-            chart_data = _parse_structured_tool_output(raw_output)
-            if chart_data is not None:
-                return "tool_end", {
-                    "name": name,
-                    "result_type": "chart",
-                    "result": "图表数据已生成",
-                    "chart_data": chart_data,
-                }
         result = _parse_structured_tool_output(raw_output)
         result_data = result.get("data") if isinstance(result, dict) else None
         if isinstance(result_data, dict) and result_data.get("result_type") == "file":
@@ -491,11 +482,6 @@ async def chat_stream(req: ChatRequest, current_user: dict = Depends(get_current
                             token_usage_by_run[str(run_id)] = usage
                             # 前端收到的是截至当前时刻的累计值，而不是某一个模型调用的局部值。
                             processed[1]["usage"] = _merge_token_usage(token_usage_by_run)
-                        # 如果是工具结束事件，并且是图表数据，收集图表数据
-                        if processed[0] == "tool_end" and processed[1].get("result_type") == "chart":
-                            chart_data = processed[1].get("chart_data")
-                            if isinstance(chart_data, dict):
-                                chart_specs.append(chart_data)
                         if processed[0] == "chart_spec":
                             chart_spec = processed[1].get("chart_spec")
                             if isinstance(chart_spec, dict):

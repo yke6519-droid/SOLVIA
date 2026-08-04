@@ -93,9 +93,7 @@ Agent 使用 `create_tool_calling_agent` 和 `AgentExecutor`，最多执行 20 �
   predict_power
 
 图表：
-  get_chart_capabilities
-  get_power_dataset
-  create_chart_plan
+  create_power_chart
 
 文件和表格：
   write_file
@@ -110,7 +108,7 @@ Agent 使用 `create_tool_calling_agent` 和 `AgentExecutor`，最多执行 20 �
   search_knowledge_base
 ```
 
-`backend/tools/chart_tool.py` 是旧版直接生成图表 JSON 的实现，目前没有注册给 Agent。
+旧版直接生成图表 JSON 的 `chart_tool.py` 已移除，当前图表统一通过 `create_power_chart` 进入。
 
 ## SSE 流式接口
 
@@ -178,11 +176,11 @@ Agent 使用 `create_tool_calling_agent` 和 `AgentExecutor`，最多执行 20 �
 正式图表管线：
 
 ```text
-get_chart_capabilities
-  → get_power_dataset
+create_power_chart
+  → ChartRequest
   → DatasetArtifact
-  → create_chart_plan
-  → ChartService.resolve_chart_plan
+  → ChartDataView
+  → ChartService
   → Validator
   → Builder
   → ChartSpec

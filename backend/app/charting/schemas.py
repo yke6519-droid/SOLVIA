@@ -15,6 +15,22 @@ class FieldDefinition(BaseModel):
     unit: str | None = None
 
 
+class ChartRequest(BaseModel):
+    """图表请求协议：只描述用户想看的内容，不暴露底层字段绑定。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    station_names: list[str] = Field(min_length=1)
+    target_date: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    source_types: list[Literal["actual", "predicted"]] = Field(
+        default_factory=lambda: ["actual"]
+    )
+    granularity: Literal["hourly", "daily_total"] = "hourly"
+    title: str | None = Field(default=None, max_length=80)
+
+
 class DatasetArtifact(BaseModel):
     """A business tool's normalized, permission-scoped data result."""
 
@@ -26,6 +42,21 @@ class DatasetArtifact(BaseModel):
     session_id: str
     field_schema: dict[str, FieldDefinition] = Field(alias="schema")
     rows: list[dict[str, Any]]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ChartDataView(BaseModel):
+    """图表服务消费的内部数据视图，不作为 Agent 输入协议。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: str
+    field_schema: dict[str, FieldDefinition]
+    rows: list[dict[str, Any]]
+    x_field: str
+    x_role: Literal["time", "date", "station"]
+    value_field: str
+    series_field: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

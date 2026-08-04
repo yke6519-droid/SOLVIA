@@ -26,71 +26,27 @@ class PowerSourceDefinition:
 
 
 def _load_actual(station_id: str, target_date: str) -> pd.DataFrame:
-    from backend.tools.power_query_tool import _query_actual_power
+    from backend.app.services.power_data_service import load_actual_power
 
-    frame = _query_actual_power(station_id, target_date)
-    if frame is None or frame.empty:
-        return pd.DataFrame(columns=["timestamp", "value_kwh"])
-    return pd.DataFrame(
-        {
-            "timestamp": pd.to_datetime(frame["record_time"]),
-            "value_kwh": pd.to_numeric(frame["power_kwh"], errors="coerce"),
-        }
-    )
+    return load_actual_power(station_id, target_date)
 
 
 def _load_predicted(station_id: str, target_date: str) -> pd.DataFrame:
-    from backend.tools.cache_manager import get_prediction_data_mode, read_prediction_cache
+    from backend.app.services.power_data_service import load_predicted_power
 
-    frame = read_prediction_cache(
-        station_id,
-        target_date,
-        get_prediction_data_mode(target_date),
-    )
-    if frame is None or frame.empty:
-        return pd.DataFrame(columns=["timestamp", "value_kwh"])
-    return pd.DataFrame(
-        {
-            "timestamp": pd.to_datetime(frame["time"]),
-            "value_kwh": pd.to_numeric(frame["fusion"], errors="coerce"),
-        }
-    )
+    return load_predicted_power(station_id, target_date)
 
 
 def _load_actual_range(station_id: str, start_date: str, end_date: str) -> pd.DataFrame:
-    from backend.tools.power_query_tool import _query_actual_power_range
+    from backend.app.services.power_data_service import load_actual_power_range
 
-    frame = _query_actual_power_range(station_id, start_date, end_date)
-    if frame is None or frame.empty:
-        return pd.DataFrame(columns=["timestamp", "value_kwh"])
-    return pd.DataFrame(
-        {
-            "timestamp": pd.to_datetime(frame["record_time"]),
-            "value_kwh": pd.to_numeric(frame["power_kwh"], errors="coerce"),
-        }
-    )
+    return load_actual_power_range(station_id, start_date, end_date)
 
 
 def _load_predicted_range(station_id: str, start_date: str, end_date: str) -> pd.DataFrame:
-    from backend.tools.cache_manager import get_prediction_data_mode, read_prediction_cache
+    from backend.app.services.power_data_service import load_predicted_power_range
 
-    frames = []
-    for day in pd.date_range(start_date, end_date, freq="D"):
-        day_string = day.strftime("%Y-%m-%d")
-        frame = read_prediction_cache(
-            station_id,
-            day_string,
-            get_prediction_data_mode(day_string),
-        )
-        if frame is None or frame.empty:
-            continue
-        frames.append(pd.DataFrame({
-            "timestamp": pd.to_datetime(frame["time"]),
-            "value_kwh": pd.to_numeric(frame["fusion"], errors="coerce"),
-        }))
-    if not frames:
-        return pd.DataFrame(columns=["timestamp", "value_kwh"])
-    return pd.concat(frames, ignore_index=True)
+    return load_predicted_power_range(station_id, start_date, end_date)
 
 
 POWER_SOURCE_REGISTRY: dict[str, PowerSourceDefinition] = {

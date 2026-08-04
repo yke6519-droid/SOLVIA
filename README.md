@@ -8,7 +8,7 @@ SolarAgent 是一个面向光伏电站运营场景的智能分析 Agent。系统
 - `frontend/`：Vue 3 + Vite 独立工作台。
 - `shared/`：前后端共享配置。
 
-> 本 README 按 2026-08-03 当前源码整理。当前 Runtime 已完成 R1、R2、R2.5、R3 和 R4 的代码改造；R4-C 仍待真实前端导入验收。旧版 `chart_tool.py` 仍保留在仓库中，但已经不在 Agent 工具注册表中；正式图表链路以 `get_chart_capabilities → get_power_dataset → create_chart_plan` 为准。
+> 本 README 按当前源码整理。旧版 `chart_tool.py` 已移除，正式图表入口为 `create_power_chart`。
 
 ## 一、技术栈
 
@@ -69,10 +69,10 @@ flowchart LR
 ### 2.3 结构化图表闭环
 
 ```text
-get_chart_capabilities
-        → get_power_dataset
+create_power_chart
+        → ChartRequest
         → DatasetArtifact
-        → create_chart_plan
+        → ChartDataView
         → ChartService 校验和编译
         → ChartSpec
         → SSE chart_spec
@@ -178,7 +178,7 @@ Agent 输出文本中的服务器路径和 `/api/files/...` 下载链接会被�
 | 文件 | `write_file`、`read_file`、`verify_file` |
 | 表格 | `export_table`、`read_table` |
 | 附件导入 | `import_power_data` |
-| 图表 | `get_chart_capabilities`、`get_power_dataset`、`create_chart_plan` |
+| 图表 | `create_power_chart` |
 | 其他 | `search_knowledge_base`、`ask_user` |
 
 Prompt 要求 Agent 先在内部拆分目标、站点/地区、日期、数据来源和输出形式，再逐步调用工具。对于“查询全部已接入站点”这种明确事实请求，流式接口还会检查是否真实调用了 `list_all_stations`，避免模型直接幻想站点清单。
@@ -510,10 +510,10 @@ npm run build
 6. **Redis 缓存**：站点目录、会话列表和热点历史尚未接入 Redis；MySQL 是当前事实源。
 7. **历史会话性能**：已经完成游标分页、请求去重和有限消息加载，后续仍可做会话缓存、图表按需加载和虚拟列表。
 8. **图表能力范围**：当前只开放三类折线/柱状能力，未开放饼图、雷达图、地图、组合图和任意数据变换。
-9. **图表数据组合**：预测/实际对比可以通过 `get_power_dataset` 重新读取两种数据源生成统一长表；尚未实现直接把两个已有 `artifact_id` 组合成派生数据制品。
+9. **图表数据组合**：预测/实际对比可以通过 `create_power_chart` 重新读取两种数据源生成统一长表；尚未实现直接把两个已有 `artifact_id` 组合成派生数据制品。
 10. **附件预览体验**：后端和工具可读取多 Sheet 工作簿，但前端尚未提供通用的多 Sheet 表格浏览器。
 11. **部署与可观测性**：尚未补齐 Docker、任务队列、指标监控、链路追踪、接口限流和集中日志。
-12. **旧代码收口**：`chart_tool.py` 与独立旧定时预测脚本仍保留在仓库中，但不属于当前 Agent 主链路。
+12. **旧代码收口**：旧版图表工具、实验 LLM 文件和独立旧定时预测脚本已清理；运行时只保留当前 Agent 主链路。
 
 
 ## 十二、仓库地址
