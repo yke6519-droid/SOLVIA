@@ -17,7 +17,7 @@ import math
 from datetime import datetime
 from typing import Annotated
 
-from langchain_core.tools import tool, ToolException
+from langchain_core.tools import ToolException
 
 
 # 图表配色(预测蓝、实际橙、偏差红)
@@ -155,10 +155,10 @@ def _build_chart_data(df, data_type, info, predict_date):
 
 
 # ============================================================
-# LangChain Tool (@tool, 暴露给 LLM)
+# 旧版兼容函数（不注册为 Agent Tool）
 # ============================================================
 
-@tool
+# 旧版兼容函数：保留实现，但不再注册为 Agent Tool。
 def get_power_chart_data(
     station_name: Annotated[str, "站点名称,如 '英杰'"],
     target_date: Annotated[str, "日期,支持 'YYYY-MM-DD'、'7月13日'、'7.13'、'后天' 等"],
@@ -340,7 +340,7 @@ def _build_range_chart_data(frames, station_info, start_date, end_date, data_typ
     }
 
 
-@tool
+# 旧版兼容函数：保留实现，但不再注册为 Agent Tool。
 def get_power_chart_data_by_range(
     station_name: Annotated[str, "站点名称，例如 '英杰'"],
     start_date: Annotated[str, "开始日期，支持 YYYY-MM-DD、6月1日、6.1、后天等格式"],

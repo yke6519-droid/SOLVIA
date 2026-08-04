@@ -154,7 +154,9 @@ def create_dataset_artifact(
 ) -> DatasetArtifact:
     """把 DataFrame 标准化并登记为当前任务的数据制品。"""
 
+    # 拿到上下文中的数据制品归属信息，保证不会被其他会话或用户访问。
     context = get_dataset_context()
+    # 画图类型判断
     if artifact_type not in {"hourly_series", "daily_aggregate", "tabular"}:
         raise DatasetArtifactError("DATASET_TYPE_UNSUPPORTED", f"不支持的数据制品类型: {artifact_type}")
     if not isinstance(frame, pd.DataFrame):
@@ -254,6 +256,7 @@ def save_dataset_artifact(artifact: DatasetArtifact) -> DatasetArtifact:
     return artifact
 
 
+# 读取数据制品，保证 Agent 只能访问当前会话和用户的制品。
 def _load_persisted_artifact(artifact_id: str, *, user_id: int, session_id: str) -> DatasetArtifact:
     with get_engine().connect() as conn:
         row = conn.execute(
@@ -289,6 +292,7 @@ def load_dataset_artifact(artifact_id: str) -> DatasetArtifact:
     """按当前用户和会话读取数据制品，优先进程缓存，失败后查 MySQL。"""
 
     context = get_dataset_context()
+    # 从进程缓存中读取，避免每次都访问 MySQL。
     try:
         artifact = artifact_store.get(
             artifact_id,
@@ -296,6 +300,7 @@ def load_dataset_artifact(artifact_id: str) -> DatasetArtifact:
             session_id=context.session_id,
         )
         return normalize_dataset_artifact(artifact)
+    # 
     except ChartValidationError:
         artifact = _load_persisted_artifact(
             artifact_id,
