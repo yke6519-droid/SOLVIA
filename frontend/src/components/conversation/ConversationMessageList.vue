@@ -177,7 +177,7 @@ defineExpose({
       <div v-if="message.role === 'assistant'" class="assistant-avatar">S</div>
       <div class="message-body">
         <div class="message-meta">
-          <span>{{ message.role === 'assistant' ? 'Solvia' : '你' }}</span>
+          <span>{{ message.role === 'assistant' ? 'SOLVIA' : '你' }}</span>
           <span>{{ message.time }}</span>
         </div>
         <div
