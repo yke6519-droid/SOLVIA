@@ -30,20 +30,24 @@ flowchart LR
     U["用户登录"] --> H["进入欢迎页"]
     H --> S["发送自然语言任务"]
     S --> A["Agent 拆分步骤并调用工具"]
-    A --> RT["RuntimeManagedTool<br/>RuntimeEngine"]
+    A --> MT["RuntimeManagedTool<br/>Agent 实际调用的外层 Tool"]
+    MT --> RT["RuntimeEngine<br/>生命周期编排"]
     RT --> HC{"Hook Chain<br/>状态 / Policy / 确认 / 输入校验"}
     HC -- "需要确认" --> C["RuntimeInteractionService<br/>AskUser 卡片 / SSE"]
-    C --> RT
-    HC -- "允许执行" --> T["原始业务 Tool"]
+    C -- "确认结果返回当前调用" --> RT
+    HC -- "允许执行" --> T["原始业务 Tool<br/>ManagedTool 内部持有的 delegate"]
     T --> N["ResultNormalizer<br/>统一 ToolResult"]
-    N --> R["流式返回文字、过程和结构化结果"]
-    T -. "LangChain 事件" .-> O["RuntimeObserver<br/>run_id / call_id / 状态事件"]
-    O -. "旁路 RuntimeEvent" .-> R
+    N --> AFTER["RuntimeHookChain.after_tool_call"]
+    AFTER --> R["原始业务结果返回 Agent<br/>再流式展示给前端"]
+    MT -. "LangChain 事件" .-> O["RuntimeObserver<br/>run_id / call_id / 状态事件"]
+    O -. "旁路 RuntimeEvent" .-> LOG["结构化日志 / event_sink"]
     R --> P["图表或文件卡片"]
     P --> F["继续追问、导出或下载"]
 ```
 
-Runtime 位于已接入管理的 Agent 工具和业务工具之间：主链路负责执行前检查、确认、工具调用和结果标准化；`RuntimeObserver` 通过 LangChain 事件流旁路记录运行状态，不替代业务工具执行。当前并非所有工具都已接入 `RuntimeManagedTool`，未接入工具仍经过统一输入边界，并由 Observer 观察。
+`RuntimeManagedTool` 是 Agent 实际拿到的 Tool 外观，内部组合持有原始业务 Tool；它把调用转交给 `RuntimeEngine`，由 HookChain 决定是否执行。主链路负责执行前检查、确认、工具调用和结果标准化；`RuntimeObserver` 通过 LangChain 事件流旁路记录运行状态，不替代业务工具执行。当前并非所有工具都已接入 `RuntimeManagedTool`，未接入工具仍经过统一输入边界，并由 Observer 观察。
+
+其中，`RuntimeEvent` 当前通过 `event_sink` 写入结构化日志；`ResultNormalizer` 产生的 `ToolResult` 供 Runtime Hook 和 Observer 使用，Agent 仍接收原始业务结果。
 
 ### 2.2 统一数据制品闭环
 
@@ -260,13 +264,16 @@ flowchart TB
     SSE["Fetch + ReadableStream<br/>SSE 对话"]
     API["FastAPI 路由层"]
     AG["LangChain AgentExecutor"]
-    RT["Runtime 层<br/>ManagedTool / Engine"]
+    MT["RuntimeManagedTool<br/>Agent 实际调用的外层 Tool"]
+    RT["RuntimeEngine<br/>生命周期编排"]
     HC["RuntimeHookChain<br/>State / Budget / Confirmation / Policy"]
     INT["RuntimeInteractionService<br/>PendingInteraction"]
+    INPUT["request_user_input<br/>InteractionTransport"]
     BR["AskUserBridge<br/>SSE /reply"]
     OBS["RuntimeObserver<br/>旁路 RuntimeEvent"]
+    LOG["结构化 Runtime 日志"]
     NORM["ResultNormalizer<br/>统一 ToolResult"]
-    TOOL["光伏业务工具"]
+    TOOL["原始光伏业务工具<br/>ManagedTool 内部 delegate"]
     CTX["执行上下文<br/>站点 / 图表 / 数据制品 / 附件"]
     DB["MySQL"]
     FS["FILE_DIR 本地文件存储"]
@@ -277,16 +284,20 @@ flowchart TB
     REST --> API
     SSE --> API
     API --> AG
-    AG --> RT
+    AG --> MT
+    MT --> RT
     RT --> HC
     HC --> TOOL
     RT --> INT
-    INT --> BR
+    INT --> INPUT
+    INPUT --> BR
     BR -. "问题 / 回复" .-> API
     API --> OBS
-    OBS -. "旁路事件" .-> API
+    OBS -. "旁路事件" .-> LOG
     TOOL --> NORM
-    NORM --> AG
+    NORM -. "Runtime 内部 ToolResult" .-> RT
+    RT --> MT
+    MT --> AG
     API --> CTX
     TOOL --> CTX
     TOOL --> DB
