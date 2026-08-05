@@ -1,6 +1,6 @@
-# SolarAgent
+# SOLVIA
 
-SolarAgent 是一个面向光伏电站运营场景的智能分析 Agent。系统通过自然语言理解用户需求，调用站点、气象、实际发电量、预测、文件和图表工具，完成数据查询、发电预测、历史回测、可视化分析、文件导入与结果导出。
+SOLVIA 是一个面向光伏电站运营场景的智能分析 Agent。系统通过自然语言理解用户需求，调用站点、气象、实际发电量、预测、文件和图表工具，完成数据查询、发电预测、历史回测、可视化分析、文件导入与结果导出。
 
 项目已经完成前后端分离：
 
@@ -518,4 +518,4 @@ npm run build
 
 ## 十二、仓库地址
 
-GitHub：<https://github.com/yke6519-droid/SolarAgent>
+GitHub：<https://github.com/yke6519-droid/SOLVIA>
