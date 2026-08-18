@@ -414,18 +414,6 @@ npm install
 npm run dev
 ```
 
-开发地址固定为 `http://localhost:5173`。如果 5173 已被占用，Vite 会选择其他可用端口；需要固定端口时应先释放占用进程。
-
-### 7.3 前端生产构建
-
-```powershell
-cd D:\AAA_myProjects\howso\myAgent\solar_agent\frontend
-npm run build
-npm run preview
-```
-
-`vite preview` 默认使用 4173，但它不是生产部署服务器。正式部署时应让 Nginx 等静态服务器托管 `frontend/dist`，并将 `/api` 反向代理到 FastAPI；或者在构建时提供完整的 `VITE_API_BASE_URL`。
-
 ## 八、主要接口
 
 | 方法 | 路径 | 功能 |
@@ -477,45 +465,3 @@ npm run preview
 
 迁移脚本以可重复执行为目标，但初始化脚本和真实生产表结构仍应根据实际数据库状态审查后执行。
 
-## 十、测试与检查
-
-后端：
-
-```powershell
-cd D:\AAA_myProjects\howso\myAgent\solar_agent
-& .\.venv\Scripts\python.exe -m pytest -q backend\tests
-& .\.venv\Scripts\python.exe -m compileall -q backend
-```
-
-前端：
-
-```powershell
-cd D:\AAA_myProjects\howso\myAgent\solar_agent\frontend
-npm run build
-```
-
-当前测试覆盖图表注册和限制、统一异常、Refresh Token、站点解析/地区范围、数据制品上下文、文件产物事件、表格导出和历史消息安全清洗。
-
-最近一次完整验证：`pytest backend/tests -q` 通过 148 个测试，`unittest discover` 通过 136 个测试，后端语法检查和前端 `npm run build` 均通过；前端导入真实浏览器验收仍待完成。
-
-## 十一、当前状态与待完成
-
-当前阶段：R4-C 代码已完成，待真实前端导入验收。后续阶段为 R5 完成证据与数据制品解耦、R6 Runtime 持久化与恢复。
-
-1. **R4-C 真实验收**：代码已完成，仍需在真实前端验证预览、确认、取消、重复导入、文件变化和多 Sheet 回滚。
-2. **R5 完成证据与数据制品解耦**：尚未建立统一的完成证据登记和更高层图表数据解析入口。
-3. **R6 运行持久化与恢复**：Runtime 事件、运行状态、PendingInteraction 和业务 Checkpoint 尚未支持服务重启恢复。
-4. **前端模块拆分**：核心页面、对话组件和业务 composables 已完成拆分；`App.vue` 仍承担页面级编排，后续可继续拆为 workspace controller 或更细粒度 composables。
-5. **附件存储**：当前文件本体保存在本地 `FILE_DIR`；尚未迁移到阿里云 OSS 等对象存储。
-6. **Redis 缓存**：站点目录、会话列表和热点历史尚未接入 Redis；MySQL 是当前事实源。
-7. **历史会话性能**：已经完成游标分页、请求去重和有限消息加载，后续仍可做会话缓存、图表按需加载和虚拟列表。
-8. **图表能力范围**：当前只开放三类折线/柱状能力，未开放饼图、雷达图、地图、组合图和任意数据变换。
-9. **图表数据组合**：预测/实际对比可以通过 `create_power_chart` 重新读取两种数据源生成统一长表；尚未实现直接把两个已有 `artifact_id` 组合成派生数据制品。
-10. **附件预览体验**：后端和工具可读取多 Sheet 工作簿，但前端尚未提供通用的多 Sheet 表格浏览器。
-11. **部署与可观测性**：尚未补齐 Docker、任务队列、指标监控、链路追踪、接口限流和集中日志。
-12. **旧代码收口**：旧版图表工具、实验 LLM 文件和独立旧定时预测脚本已清理；运行时只保留当前 Agent 主链路。
-
-
-## 十二、仓库地址
-
-GitHub：<https://github.com/yke6519-droid/SOLVIA>
