@@ -21,6 +21,7 @@ from backend.app.runtime.enums import (
     InteractionType,
     PolicyAction,
     RuntimeInteractionCode,
+    ToolRiskLevel,
     ToolResultStatus,
 )
 
@@ -58,7 +59,8 @@ class ToolSpec(RuntimeModel):
     max_attempts: int = Field(default=1, ge=1)
     idempotent: bool = True
     side_effect_level: str = Field(default="read", min_length=1)
-    requires_confirmation: bool = False
+    # 工具只声明自身风险；是否需要确认由 Runtime Policy 统一决定。
+    risk_level: ToolRiskLevel = ToolRiskLevel.LOW
     allowed_states: list[AgentRunState] = Field(
         default_factory=lambda: [AgentRunState.RUNNING]
     )

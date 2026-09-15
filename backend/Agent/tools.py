@@ -32,6 +32,7 @@ from backend.tools.import_tool import build_import_confirmation_request
 from backend.app.runtime import (
     RuntimeEngine,
     RuntimeInteractionService,
+    ToolRiskLevel,
     UserIntentInterpreter,
     build_tool_spec,
     wrap_tool,
@@ -112,7 +113,13 @@ def get_all_tools(
                 runtime_engine=runtime_engine,
                 runtime_spec=build_tool_spec(
                     tool,
-                    requires_confirmation=tool.name in {"predict_power", "import_power_data"},
+                    risk_level=(
+                        ToolRiskLevel.HIGH
+                        if tool.name == "predict_power"
+                        else ToolRiskLevel.CRITICAL
+                        if tool.name == "import_power_data"
+                        else ToolRiskLevel.LOW
+                    ),
                 ),
             )
         else:

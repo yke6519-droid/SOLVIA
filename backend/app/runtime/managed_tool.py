@@ -12,7 +12,7 @@ from backend.app.runtime.context import (
     get_runtime_context,
     get_runtime_invocation_bridge,
 )
-from backend.app.runtime.enums import AgentRunState, PolicyAction
+from backend.app.runtime.enums import AgentRunState, PolicyAction, ToolRiskLevel
 from backend.app.runtime.exceptions import RuntimeFatalError
 from backend.app.runtime.models import (
     PolicyDecision,
@@ -59,7 +59,7 @@ def build_tool_spec(
     max_attempts: int = 1,
     idempotent: bool = True,
     side_effect_level: str = "read",
-    requires_confirmation: bool = False,
+    risk_level: ToolRiskLevel = ToolRiskLevel.LOW,
     allowed_states: list[AgentRunState] | None = None,
     evidence_type: str | None = None,
     checkpoint_mode: str = "none",
@@ -74,7 +74,7 @@ def build_tool_spec(
         max_attempts=max_attempts,
         idempotent=idempotent,
         side_effect_level=side_effect_level,
-        requires_confirmation=requires_confirmation,
+        risk_level=risk_level,
         allowed_states=allowed_states or [AgentRunState.RUNNING],
         evidence_type=evidence_type,
         checkpoint_mode=checkpoint_mode,
@@ -103,17 +103,18 @@ class RuntimeEngine:
         self._budget_hook = BudgetHook(max_tool_calls)
         self._policy_hook = PolicyHook()
         self._result_normalizer = result_normalizer or ResultNormalizer()
-        hooks = [self._state_hook, self._budget_hook]
-        if interaction_service is not None:
-            hooks.append(
-                ConfirmationHook(
-                    interaction_service,
-                    request_builders=confirmation_request_builders,
-                )
+        # 确认 Hook 不参与普通规则遍历；只有 Policy 返回 ASK_USER 时才调用。
+        self._confirmation_hook = (
+            ConfirmationHook(
+                interaction_service,
+                request_builders=confirmation_request_builders,
             )
-        # 确认 Hook 放在 Policy 之前，保持 R2 原有“确认先于 Policy”的语义。
-        hooks.append(self._policy_hook)
-        self._hook_chain = RuntimeHookChain(hooks)
+            if interaction_service is not None
+            else None
+        )
+        self._hook_chain = RuntimeHookChain(
+            [self._state_hook, self._budget_hook, self._policy_hook]
+        )
 
     @property
     def hook_chain(self) -> RuntimeHookChain:
@@ -218,6 +219,27 @@ class RuntimeEngine:
             invocation,
             spec,
         )
+
+        if decision.action == PolicyAction.ASK_USER:
+            # Policy 只决定“需要确认”；RuntimeEngine 负责调度真正的确认流程。
+            if self._confirmation_hook is None:
+                raise RuntimeFatalError(
+                    "RUNTIME_CONFIRMATION_UNAVAILABLE",
+                    f"工具 {spec.name} 需要用户确认，但未配置交互服务",
+                    details={
+                        "tool_name": spec.name,
+                        "risk_level": spec.risk_level.value,
+                        "policy_name": decision.policy_name,
+                    },
+                    run_id=context.run_id,
+                    call_id=invocation.call_id,
+                )
+            decision = await self._confirmation_hook.before_tool_call(
+                context,
+                invocation,
+                spec,
+            )
+
         invocation.policy_decision = decision
         self._raise_for_hook_decision(
             context,

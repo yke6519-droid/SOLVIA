@@ -15,6 +15,7 @@ from backend.app.runtime.enums import (
     InteractionState,
     PolicyAction,
     RuntimeInteractionCode,
+    ToolRiskLevel,
 )
 from backend.app.runtime.exceptions import RuntimeFatalError, RuntimeInteractionError
 from backend.app.runtime.models import (
@@ -177,17 +178,24 @@ class BudgetHook(BaseRuntimeHook):
         return None
 
 
-def _default_allow_policy(
+def _default_risk_policy(
     _context: RuntimeContext,
-    _spec: ToolSpec,
+    spec: ToolSpec,
     _arguments: dict[str, Any],
 ) -> PolicyDecision:
-    """默认只读策略：前置规则通过后允许工具继续执行。"""
+    """根据工具声明的风险等级返回默认治理决定。"""
+
+    if spec.risk_level == ToolRiskLevel.LOW:
+        return PolicyDecision(
+            action=PolicyAction.ALLOW,
+            reason="低风险工具允许直接执行",
+            policy_name="runtime_risk_policy",
+        )
 
     return PolicyDecision(
-        action=PolicyAction.ALLOW,
-        reason="R2 默认策略允许只读工具执行",
-        policy_name="r2_default_allow",
+        action=PolicyAction.ASK_USER,
+        reason=f"{spec.risk_level.value} 风险工具需要用户确认",
+        policy_name="runtime_risk_policy",
     )
 
 
@@ -202,9 +210,9 @@ class PolicyHook(BaseRuntimeHook):
         ]
         | None = None,
     ) -> None:
-        """直接接收策略函数；未传入时使用当前 R2 的默认允许策略。"""
+        """直接接收策略函数；未传入时使用默认风险策略。"""
 
-        self._policy = policy or _default_allow_policy
+        self._policy = policy or _default_risk_policy
 
     async def before_tool_call(
         self,
@@ -245,11 +253,8 @@ class ConfirmationHook(BaseRuntimeHook):
         context: RuntimeContext,
         invocation: ToolInvocation,
         spec: ToolSpec,
-    ) -> PolicyDecision | None:
-        """确认通过才允许工具继续；缓存命中等无需确认时直接放行。"""
-
-        if not spec.requires_confirmation:
-            return None
+    ) -> PolicyDecision:
+        """执行已经由 Policy 决定需要进行的用户确认。"""
 
         builder = self._request_builders.get(spec.name)
         if builder is None:

@@ -8,6 +8,7 @@ from backend.app.runtime.enums import (
     InteractionType,
     IntentSource,
     PolicyAction,
+    ToolRiskLevel,
     RuntimeInteractionCode,
     ToolResultStatus,
 )
@@ -96,6 +97,7 @@ __all__ = [
     "make_confirmation_key",
     "PendingInteraction",
     "PolicyAction",
+    "ToolRiskLevel",
     "PolicyDecision",
     "PolicyHook",
     "RuntimeContext",

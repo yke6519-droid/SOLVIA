@@ -25,6 +25,15 @@ class ToolResultStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class ToolRiskLevel(str, Enum):
+    """工具执行风险等级，由 Runtime Policy 决定对应的治理规则。"""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
 class PolicyAction(str, Enum):
     """Runtime 策略未来可以对工具调用采取的动作。"""
 
